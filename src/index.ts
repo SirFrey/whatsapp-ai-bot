@@ -8,6 +8,7 @@ import OpenAI from "openai";
 import qrcode from "qrcode";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { calRequest, summarizeCalResult, ToolLogEvent } from "./utils/cal";
 
 // ========== CONFIG ==========
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
@@ -46,19 +47,19 @@ const contexts = new Map<string, BotContext>();
 const MAX_HISTORY = 20;
 
 // Allowed senders (numbers without '+')
-const ALLOWED_NUMBERS = ["+584242392804", "+584242479230"].map((n) =>
+const ALLOWED_NUMBERS = ["+584242392804", "+584242479230", "+584164156312" ].map((n) =>
   n.replace(/^\+/, ""),
 );
 
 // System prompt
 const SYSTEM_PROMPT =
-  "Eres un asistente para una odontóloga que ayuda a pedir cita de forma cercana y fácil de entender. " +
-  "Habla en español sencillo y claro, con un tono amable y natural, sin usar palabras complicadas. " +
-  "Tu misión es conseguir rápido la fecha, la hora, el nombre del paciente y el servicio que desea. " +
-  "Haz preguntas simples como “¿Qué día te viene bien?”, “¿A qué hora prefieres tu cita?” o “¿Cómo te llamas?”. " +
-  "Si la conversación se va por otro lado, redirige con cortesía a la programación de la cita. " +
-  "Más adelante podrás dar detalles de ubicación, precios, servicios o el equipo de la clínica cuando haga falta; por ahora, concéntrate en conseguir la cita. " +
-  "No uses jerga médica, mantén todo simple y directo. ";
+  "Eres el asistente virtual de la Dra. en el consultorio dental. Responde con frases breves y claras. " +
+  "En tu primer mensaje, presentate y preguntale al cliente que desea de forma corta, concisa y formal. " +
+  "Si el usuario desea reservar una cita, pregunta qué servicio dental necesita y luego solicita su nombre completo. " +
+  "No envíes el enlace de reserva hasta haber recibido y confirmado ambos datos (servicio y nombre). " +
+  "Cuando los obtengas, llama a la función generate_booking_url con los parámetros name y service, y comparte el enlace para que el usuario elija fecha y hora. " +
+  "Si el usuario no desea reservar pero hace preguntas sobre limpieza dental, horarios de atención, dirección u otros temas relacionados con odontología, proporciona información relevante sin mencionar el enlace de reserva. " +
+  "Si el usuario aborda temas no relacionados con odontología, infórmale amablemente que solo puedes ayudar con información y gestión de reservas odontologicas, y redirígelo al tema principal.";
 
 // Rate limiting
 const RATE_LIMIT_MS = 2_000;
@@ -76,21 +77,75 @@ type Appointment = {
 const appointments = new Map<string, Appointment[]>();
 
 // ---------- Tools (Tools API) ----------
-// 1) Create appointment (function tool)
-const TOOL_CREATE_APPT = {
+// ---- Cal.com Tools ----
+const TOOL_CAL_GET_SLOTS = {
   type: "function",
   function: {
-    name: "create_appointment",
-    description: "Create a dental appointment record",
+    name: "cal_get_slots",
+    description:
+      "Obtiene slots disponibles para un Event Type. Acepta eventTypeId o (username + eventTypeSlug). Devuelve la respuesta cruda de Cal.com.",
     parameters: {
       type: "object",
       properties: {
-        date: { type: "string", description: "Fecha de la cita YYYY-MM-DD" },
-        time: { type: "string", description: "Hora HH:MM (24h)" },
+        eventTypeId: { type: "number", description: "ID del event type" },
+        username: {
+          type: "string",
+          description: "username del usuario en Cal.com",
+        },
+        eventTypeSlug: { type: "string", description: "slug del event type" },
+        start: {
+          type: "string",
+          description: "ISO date (YYYY-MM-DD) o ISO datetime",
+        },
+        end: {
+          type: "string",
+          description: "ISO date (YYYY-MM-DD) o ISO datetime",
+        },
+        timeZone: {
+          type: "string",
+          description: "Zona IANA (ej. America/Caracas)",
+        },
+      },
+      required: ["start", "end"],
+    },
+  },
+} as const;
+
+const TOOL_CAL_GET_SCHEDULES = {
+  type: "function",
+  function: {
+    name: "cal_get_schedules",
+    description:
+      "Lista los schedules (horarios/availability) del usuario autenticado, incluyendo timeZone y bloques por día.",
+    parameters: { type: "object", properties: {} },
+  },
+} as const;
+
+const TOOL_CAL_GET_EVENT_TYPES = {
+  type: "function",
+  function: {
+    name: "cal_get_event_types",
+    description:
+      "Lista los event types del usuario (duración, buffers, scheduleId, etc.) para que el asistente entienda qué ofrecer.",
+    parameters: { type: "object", properties: {} },
+  },
+} as const;
+
+// 1) Create appointment (function tool)
+// Tool to generate a Cal.com booking link after collecting user data
+const TOOL_GENERATE_BOOK_URL = {
+  type: "function",
+  function: {
+    name: "generate_booking_url",
+    description:
+      "Genera un enlace de reserva de Cal.com usando nombre y servicio proporcionados",
+    parameters: {
+      type: "object",
+      properties: {
         name: { type: "string", description: "Nombre completo del cliente" },
         service: { type: "string", description: "Tipo de servicio dental" },
       },
-      required: ["date", "time", "name", "service"],
+      required: ["name", "service"],
     },
   },
 } as const;
@@ -170,7 +225,10 @@ function buildTimeAnchor(tz?: string, locale = "es-VE") {
 }
 
 // ---------- Agent executor (Tools API with tool_calls) ----------
-async function runAgent(messagesForAPI: ChatMessage[]) {
+async function runAgent(
+  messagesForAPI: ChatMessage[],
+  options?: { onTool?: (e: ToolLogEvent) => void; forceGetTime?: boolean },
+) {
   const MAX_STEPS = 3;
   let msgs = [...messagesForAPI];
 
@@ -178,64 +236,286 @@ async function runAgent(messagesForAPI: ChatMessage[]) {
     const completion = await openai.chat.completions.create({
       model: "deepseek-chat",
       messages: msgs,
-      tools: [TOOL_CREATE_APPT, TOOL_GET_DATETIME],
-      tool_choice: "auto",
+      tools: [
+        TOOL_GENERATE_BOOK_URL,
+        TOOL_GET_DATETIME,
+        TOOL_CAL_GET_SLOTS,
+        TOOL_CAL_GET_SCHEDULES,
+        TOOL_CAL_GET_EVENT_TYPES,
+      ],
+      tool_choice: options?.forceGetTime
+        ? { type: "function", function: { name: "get_datetime" } }
+        : "auto",
     });
 
     const choice = completion.choices?.[0]?.message;
     if (!choice) return { type: "final", content: "No response." } as const;
 
-    const toolCalls = choice.tool_calls;
-
-    if (toolCalls && toolCalls.length > 0) {
-      // IMPORTANT: first append the assistant message that contains tool_calls
+    const calls = choice.tool_calls;
+    if (calls && calls.length) {
+      // MUST push the assistant message that contains tool_calls first (per Tools API).
       msgs.push(choice);
 
-      // For each tool call, execute locally and append a paired tool message
-      for (const tc of toolCalls) {
-        const fnName = tc.function?.name;
-        const rawArgs = tc.function?.arguments || "{}";
-
-        let parsedArgs: any = {};
+      for (const tc of calls) {
+        const fn = tc.function?.name;
+        const raw = tc.function?.arguments || "{}";
+        let args: any = {};
         try {
-          parsedArgs = JSON.parse(rawArgs);
-        } catch {
-          parsedArgs = {};
-        }
+          args = JSON.parse(raw);
+        } catch {}
 
         try {
-          if (fnName === "get_datetime") {
-            const info = getNowInfo({
-              timezone: parsedArgs?.timezone,
-              locale: parsedArgs?.locale,
+          if (fn === "cal_get_slots") {
+            options?.onTool?.({
+              source: "cal",
+              phase: "call",
+              name: fn!,
+              args,
+            });
+
+            // Defaults from env so we never fall back to “dynamic event” unless requested.
+            const defaultEventTypeId = process.env.CALCOM_EVENT_TYPE_ID
+              ? Number(process.env.CALCOM_EVENT_TYPE_ID)
+              : undefined;
+            const defaultUsername = process.env.CALCOM_USERNAME;
+            const defaultEventTypeSlug = process.env.CALCOM_EVENT_TYPE_SLUG;
+            const defaultTeamSlug = process.env.CALCOM_TEAM_SLUG;
+            const defaultOrgSlug = process.env.CALCOM_ORG_SLUG;
+
+            // Normalize incoming args
+            let {
+              eventTypeId,
+              eventTypeSlug,
+              username,
+              teamSlug,
+              organizationSlug,
+              usernames,
+              start,
+              end,
+              timeZone,
+            } = args || {};
+            timeZone = timeZone || DEFAULT_TZ;
+
+            // If no identifiers were provided, apply configured defaults
+            if (
+              !eventTypeId &&
+              !eventTypeSlug &&
+              !username &&
+              !teamSlug &&
+              !usernames
+            ) {
+              if (defaultEventTypeId) {
+                eventTypeId = defaultEventTypeId;
+              } else if (defaultUsername && defaultEventTypeSlug) {
+                username = defaultUsername;
+                eventTypeSlug = defaultEventTypeSlug;
+              } else if (defaultTeamSlug && defaultEventTypeSlug) {
+                teamSlug = defaultTeamSlug;
+                eventTypeSlug = defaultEventTypeSlug;
+                organizationSlug = organizationSlug || defaultOrgSlug; // recommended for teams
+              }
+            }
+
+            // Validate identifier combinations per Cal.com v2
+            const hasById = !!eventTypeId;
+            const hasUserSlug = !!eventTypeSlug && !!username;
+            const hasTeamSlug = !!eventTypeSlug && !!teamSlug;
+            const wantsDynamic = !!usernames; // requires >=2 + organizationSlug
+
+            if (!hasById && !hasUserSlug && !hasTeamSlug && !wantsDynamic) {
+              const errMsg = {
+                error: "missing_identifier",
+                hint: "Provide eventTypeId OR (eventTypeSlug + username) OR (eventTypeSlug + teamSlug) OR dynamic 'usernames' (2+) with organizationSlug.",
+              };
+              msgs.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                name: fn!,
+                content: JSON.stringify(errMsg),
+              });
+              continue;
+            }
+
+            // Dynamic-event constraints only if explicitly requested
+            if (wantsDynamic) {
+              const list = Array.isArray(usernames)
+                ? usernames
+                : String(usernames)
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+              if (list.length < 2 || !organizationSlug) {
+                const errMsg = {
+                  error: "invalid_dynamic_request",
+                  hint: "For dynamic slots, provide at least two usernames and the organizationSlug.",
+                };
+                msgs.push({
+                  role: "tool",
+                  tool_call_id: tc.id,
+                  name: fn!,
+                  content: JSON.stringify(errMsg),
+                });
+                continue;
+              }
+              // API expects comma-separated usernames
+              usernames = list.join(",");
+            }
+
+            // Ensure start/end present (date-only UTC window is fine for v2)
+            if (!start || !end) {
+              const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+              start = `${today}T00:00:00Z`;
+              end = `${today}T23:59:59Z`;
+            }
+
+            // Perform request
+            const data = await calRequest("/v2/slots", {
+              query: {
+                eventTypeId,
+                eventTypeSlug,
+                username,
+                teamSlug,
+                organizationSlug,
+                usernames, // only for dynamic use-cases
+                start,
+                end,
+                timeZone,
+              },
+            });
+
+            options?.onTool?.({
+              source: "cal",
+              phase: "result",
+              name: fn!,
+              args: {
+                eventTypeId,
+                eventTypeSlug,
+                username,
+                teamSlug,
+                start,
+                end,
+                timeZone,
+              },
+              resultSummary: summarizeCalResult(fn!, data),
+            });
+
+            msgs.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              name: fn!,
+              content: JSON.stringify(data),
+            });
+          } else if (fn === "cal_get_schedules") {
+            options?.onTool?.({
+              source: "cal",
+              phase: "call",
+              name: fn!,
+              args,
+            });
+            const data = await calRequest("/v2/schedules");
+            options?.onTool?.({
+              source: "cal",
+              phase: "result",
+              name: fn!,
+              args,
+              resultSummary: summarizeCalResult(fn!, data),
             });
             msgs.push({
               role: "tool",
               tool_call_id: tc.id,
-              // `name` is recommended/accepted with Tools API
-              name: fnName,
+              name: fn!,
+              content: JSON.stringify(data),
+            });
+          } else if (fn === "cal_get_event_types") {
+            options?.onTool?.({
+              source: "cal",
+              phase: "call",
+              name: fn!,
+              args,
+            });
+            const data = await calRequest("/v2/event-types");
+            options?.onTool?.({
+              source: "cal",
+              phase: "result",
+              name: fn!,
+              args,
+              resultSummary: summarizeCalResult(fn!, data),
+            });
+            msgs.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              name: fn!,
+              content: JSON.stringify(data),
+            });
+          } else if (fn === "get_datetime") {
+            options?.onTool?.({
+              source: "time",
+              phase: "call",
+              name: fn!,
+              args,
+            });
+            const info = getNowInfo({
+              timezone: args?.timezone,
+              locale: args?.locale,
+            });
+            options?.onTool?.({
+              source: "time",
+              phase: "result",
+              name: fn!,
+              args,
+              resultSummary: `${info.localDate} ${info.localTime} (${info.timezone})`,
+            });
+            msgs.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              name: fn!,
               content: JSON.stringify(info),
             });
-          } else if (fnName === "create_appointment") {
-            // Let caller persist the side effect
+          } else if (fn === "generate_booking_url") {
+            // Build Cal.com booking link using provided name and service
+            options?.onTool?.({ source: "appt", phase: "call", name: fn!, args });
+            const { name, service } = args;
+            const nameParam = encodeURIComponent(String(name || ""));
+            const serviceParam = encodeURIComponent(String(service || ""));
+            const user = process.env.CALCOM_USERNAME;
+            const slug = process.env.CALCOM_EVENT_TYPE_SLUG;
+            const eventId = process.env.CALCOM_EVENT_TYPE_ID;
+            let url = "";
+            if (user && slug) {
+              url = `https://cal.com/${user}/${slug}?name=${nameParam}&service=${serviceParam}`;
+            } else if (eventId) {
+              url = `https://cal.com/book/${eventId}?name=${nameParam}&service=${serviceParam}`;
+            } else {
+              url = "https://cal.com/booking";
+            }
+            const result = { url };
+            options?.onTool?.({ source: "appt", phase: "result", name: fn!, args, resultSummary: `url=${url}` });
+            // Return as function call so that the agent can process it
             return {
               type: "function",
-              name: "create_appointment",
-              arguments: rawArgs,
+              name: "generate_booking_url",
+              arguments: JSON.stringify(result),
             } as const;
           } else {
             msgs.push({
               role: "tool",
               tool_call_id: tc.id,
-              name: fnName ?? "unknown_tool",
-              content: JSON.stringify({ error: `Unknown tool: ${fnName}` }),
+              name: fn ?? "unknown",
+              content: JSON.stringify({ error: `Unknown tool: ${fn}` }),
             });
           }
         } catch (err) {
+          options?.onTool?.({
+            source: "cal",
+            phase: "error",
+            name: fn ?? "unknown",
+            args,
+            error: String(err),
+          });
           msgs.push({
             role: "tool",
             tool_call_id: tc.id,
-            name: fnName ?? "unknown_tool",
+            name: fn ?? "unknown",
             content: JSON.stringify({
               error: "Tool execution error",
               detail: String(err),
@@ -243,12 +523,9 @@ async function runAgent(messagesForAPI: ChatMessage[]) {
           });
         }
       }
-
-      // Continue the loop so the model can see tool outputs and produce a final reply
-      continue;
+      continue; // let the model read tool outputs and produce a final reply
     }
 
-    // No tool calls -> final assistant response
     if (choice.content?.trim()) {
       return { type: "final", content: choice.content.trim() } as const;
     }
@@ -256,16 +533,17 @@ async function runAgent(messagesForAPI: ChatMessage[]) {
 
   return {
     type: "final",
-    content: "Continuemos: ¿qué día y horario prefieres para tu cita?",
+    content: "¿Qué día y horario prefieres para tu cita?",
   } as const;
 }
 
 // ========== SHARED MESSAGE HANDLER ==========
 async function handleIncomingMessage(
   chatId: string,
-  userVisibleSender: string, // phone for WA, label for CLI
+  userVisibleSender: string,
   text: string,
   sendFn: (text: string) => Promise<void> | void,
+  opts?: { onTool?: (e: ToolLogEvent) => void },
 ) {
   if (text.length > MAX_INPUT_LENGTH) {
     await sendFn(
@@ -297,7 +575,6 @@ async function handleIncomingMessage(
     });
   }
   const ctx = contexts.get(chatId)!;
-
   let history = conversations.get(chatId) || [];
   history.push({ role: "user", content: text });
   if (history.length > MAX_HISTORY)
@@ -310,78 +587,36 @@ async function handleIncomingMessage(
       role: "system",
       content: buildTimeAnchor(tz, "es-VE"),
     };
+    // Build messages (include your NOW_ANCHOR/time anchor if added earlier)
     const ctxMsg: ChatMessage = {
       role: "system",
       content: JSON.stringify(ctx),
     };
     const promptMsg: ChatMessage = { role: "system", content: SYSTEM_PROMPT };
-    const messagesForAPI: ChatMessage[] = [
-      timeAnchorMsg,
-      ctxMsg,
-      promptMsg,
-      ...history,
-    ];
+    const messagesForAPI: ChatMessage[] = [ctxMsg, promptMsg, ...history];
 
-    const result = await runAgent(messagesForAPI);
+    // Optional heuristic to force time tool on date/time queries
+    const wantsTime =
+      /\b(hora|fecha|día|dia|año|ano|today|time|date|year)\b/i.test(text);
 
-    if (result.type === "function" && result.name === "create_appointment") {
-      // Parse & persist appointment
-      let parsed: Partial<Appointment> = {};
+    const result = await runAgent(messagesForAPI, {
+      onTool: opts?.onTool,
+      forceGetTime: wantsTime,
+    });
+
+    // Handle dynamic Cal.com booking link generation
+    if (result.type === "function" && result.name === "generate_booking_url") {
+      let payload: any = {};
       try {
-        parsed = JSON.parse(result.arguments || "{}");
+        payload = JSON.parse(result.arguments || "{}");
       } catch {}
-      const rawDate = (parsed.date || "").toLowerCase();
-      const today = new Date();
-      let dt = new Date(today);
-      if (
-        rawDate.includes("pasado mañana") ||
-        rawDate.includes("pasado manana")
-      )
-        dt.setDate(dt.getDate() + 2);
-      else if (
-        rawDate.includes("mañana") ||
-        rawDate.includes("manana") ||
-        rawDate.includes("tomorrow")
-      )
-        dt.setDate(dt.getDate() + 1);
-      else if (rawDate.includes("hoy") || rawDate.includes("today")) {
-        /* today */
-      } else {
-        const iso = new Date(parsed.date || "");
-        if (!isNaN(iso.getTime())) dt = iso;
-      }
-      const dateStr = dt.toISOString().split("T")[0];
-
-      const rawTime = (parsed.time || "").toLowerCase();
-      let timeStr = "";
-      const m = rawTime.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
-      if (m) {
-        let h = parseInt(m[1], 10);
-        const mm = m[2] ? parseInt(m[2], 10) : 0;
-        const ap = m[3];
-        if (ap === "pm" && h < 12) h += 12;
-        if (ap === "am" && h === 12) h = 0;
-        timeStr = `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-      } else if (/\d{1,2}:\d{2}/.test(rawTime)) {
-        timeStr = rawTime;
-      }
-
-      const args: Appointment = {
-        date: dateStr,
-        time: timeStr,
-        name: parsed.name || "",
-        service: parsed.service || "",
-        phone: userVisibleSender,
-      };
-
-      const list = appointments.get(chatId) || [];
-      list.push(args);
-      appointments.set(chatId, list);
-
-      const ack = `Cita programada:\n- Fecha: ${args.date}\n- Hora: ${args.time}\n- Nombre: ${args.name}\n- Teléfono: ${args.phone}\n- Servicio: ${args.service}`;
-      await sendFn(ack);
-
-      history.push({ role: "assistant", content: ack });
+      let url: string = payload.url || "";
+      const phone = userVisibleSender.replace(/^\+/, "");
+      const sep = url.includes("?") ? "&" : "?";
+      url = `${url}${sep}attendeePhoneNumber=+${encodeURIComponent(phone)}`;
+      const msg = `Aquí tienes tu enlace para completar la reserva:\n${url}`;
+      await sendFn(msg);
+      history.push({ role: "assistant", content: msg });
       if (history.length > MAX_HISTORY)
         history.splice(0, history.length - MAX_HISTORY);
       conversations.set(chatId, history);
@@ -423,8 +658,12 @@ async function startWhatsAppBot() {
       type: number;
     }[],
   ) {
+    // Subscribe to presence updates and indicate typing
     try {
       await sock.presenceSubscribe(to);
+    } catch {}
+    try {
+      await sock.sendPresenceUpdate('composing', to);
     } catch {}
     await sleep(800);
     try {
@@ -442,6 +681,10 @@ async function startWhatsAppBot() {
     } catch {
       await sock.sendMessage(to, { text }); // fallback
     }
+    // Indicate typing stopped
+    try {
+      await sock.sendPresenceUpdate('paused', to);
+    } catch {}
   }
 
   sock.ev.on("connection.update", async (update) => {
@@ -496,12 +739,31 @@ async function startCliChat() {
   const userLabel = "terminal";
 
   console.log(
-    "CLI chat iniciado. Comandos: '/reset' reinicia contexto, '/tz <IANA>' cambia zona horaria, '/exit' sale.\n",
+    "CLI chat iniciado. Comandos: '/reset', '/tz <IANA>', '/exit'.\n",
   );
 
-  const sendFn = async (text: string) => {
-    console.log(`\nAsistente: ${text}\n`);
+  const cliToolLogger = (e: ToolLogEvent) => {
+    const ts = new Date().toISOString();
+    if (e.source === "cal") {
+      if (e.phase === "call") {
+        console.log(
+          `[${ts}] [CLI][CAL][CALL] ${e.name} args=${JSON.stringify(e.args)}`,
+        );
+      } else if (e.phase === "result") {
+        console.log(
+          `[${ts}] [CLI][CAL][RESULT] ${e.name} ${e.resultSummary ?? ""}`,
+        );
+      } else if (e.phase === "error") {
+        console.log(`[${ts}] [CLI][CAL][ERROR] ${e.name} ${e.error ?? ""}`);
+      }
+    } else if (e.source === "time") {
+      if (e.phase === "result") {
+        console.log(`[${ts}] [CLI][TIME] ${e.resultSummary}`);
+      }
+    }
   };
+
+  const sendFn = async (text: string) => console.log(`\nAsistente: ${text}\n`);
 
   const resetContext = () => {
     conversations.delete(chatId);
@@ -536,7 +798,10 @@ async function startCliChat() {
       console.log(`(zona horaria establecida en ${tz})\n`);
       continue;
     }
-    await handleIncomingMessage(chatId, userLabel, user, sendFn);
+
+    await handleIncomingMessage(chatId, userLabel, user, sendFn, {
+      onTool: cliToolLogger,
+    });
   }
 
   await rl.close();
