@@ -1,3 +1,5 @@
+// Load environment variables from .env file
+import 'dotenv/config';
 import path from "path";
 import makeWASocket, {
   useMultiFileAuthState,
@@ -9,6 +11,43 @@ import qrcode from "qrcode";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { calRequest, summarizeCalResult, ToolLogEvent } from "./utils/cal";
+
+// -------- Web UI server & SSE for QR/status --------
+import http from 'http';
+import fs from 'fs';
+// SSE clients to notify QR and status
+const sseClients: http.ServerResponse[] = [];
+
+function startWebServer(port = 3000) {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/' || req.url === '/index.html') {
+      const filePath = path.join(process.cwd(), 'public', 'index.html');
+      fs.readFile(filePath, (err, data) => {
+        if (err) return res.writeHead(500).end('Error loading index.html');
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(data);
+      });
+    } else if (req.url === '/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write('\n');
+      sseClients.push(res);
+      req.on('close', () => {
+        const i = sseClients.indexOf(res);
+        if (i >= 0) sseClients.splice(i, 1);
+      });
+    } else {
+      res.writeHead(404).end();
+    }
+  });
+  server.listen(port, () => {
+    logInfo(`Web server running at http://localhost:${port}`);
+    import('open').then(open => open.default(`http://localhost:${port}`));
+  });
+}
 
 // ========== CONFIG ==========
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
@@ -47,7 +86,7 @@ const contexts = new Map<string, BotContext>();
 const MAX_HISTORY = 20;
 
 // Allowed senders (numbers without '+')
-const ALLOWED_NUMBERS = ["+584242392804", "+584242479230", "+584164156312" ].map((n) =>
+const ALLOWED_NUMBERS = ["+584242392804", "+584242479230" ].map((n) =>
   n.replace(/^\+/, ""),
 );
 
@@ -483,8 +522,10 @@ async function runAgent(
             let url = "";
             if (user && slug) {
               url = `https://cal.com/${user}/${slug}?name=${nameParam}&service=${serviceParam}`;
+              console.log(`Using user/slug: ${user}/${slug}`);
             } else if (eventId) {
               url = `https://cal.com/book/${eventId}?name=${nameParam}&service=${serviceParam}`;
+              console.log(`Using default book`, "urs", user)
             } else {
               url = "https://cal.com/booking";
             }
@@ -696,6 +737,11 @@ async function startWhatsAppBot() {
           small: true,
         });
         console.log(qrCode);
+        // send QR image to web UI
+        try {
+          const dataUrl = await qrcode.toDataURL(qr);
+          sseClients.forEach(client => client.write(`event: qr\ndata: ${dataUrl}\n\n`));
+        } catch {}
       } catch (err) {
         logError("Failed to generate QR code", err);
       }
@@ -704,8 +750,12 @@ async function startWhatsAppBot() {
       const status = (lastDisconnect?.error as any)?.output?.statusCode;
       if (status !== DisconnectReason.loggedOut) startWhatsAppBot();
       else logError("Logged out. Please delete auth_info and restart.");
+      // notify status to web UI
+      sseClients.forEach(client => client.write(`event: status\ndata: close\n\n`));
     } else if (connection === "open") {
       logInfo("Connected to WhatsApp");
+      // notify status to web UI
+      sseClients.forEach(client => client.write(`event: status\ndata: open\n\n`));
     }
   });
 
@@ -811,6 +861,11 @@ async function startCliChat() {
 // ========== ENTRYPOINT ==========
 (async () => {
   const useCli = process.argv.includes("--cli");
-  if (useCli) await startCliChat();
-  else await startWhatsAppBot();
+  if (useCli) {
+    await startCliChat();
+  } else {
+    // start web UI server
+    startWebServer();
+    await startWhatsAppBot();
+  }
 })();
