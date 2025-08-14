@@ -1,30 +1,46 @@
 # WhatsApp AI Chatbot
 
-This project is a low-budget WhatsApp AI chatbot using Bun, TypeScript, and Baileys. It listens for incoming WhatsApp messages, sends the content to OpenAI's Chat API, and replies with the generated response.
+Low-budget WhatsApp AI chatbot built with Bun, TypeScript, and Baileys. It uses an OpenAI-compatible client pointing to DeepSeek for responses and serves a small web UI for QR/status.
 
 ## Prerequisites
-- [Bun](https://bun.sh/) installed
-- A WhatsApp account for QR code login
-- OpenAI API key
+- Bun installed: https://bun.sh/
+- A WhatsApp account (to pair via QR)
+- DeepSeek API key (`DEEPSEEK_API_KEY`)
+ 
 
 ## Setup
-1. Clone the repository and navigate to the project directory.
-2. Copy `.env.example` to `.env` and set your `OPENAI_API_KEY`.
+1. Clone the repo and `cd` into it.
+2. Copy `.env.example` to `.env` and set `DEEPSEEK_API_KEY`.
 3. Install dependencies:
    ```bash
    bun install
    ```
 
-## Running
+## Run (dev)
 ```bash
+bun run start
+# or
 bun run src/index.ts
 ```
+Open http://localhost:3000 to view status and the QR. Scan it with WhatsApp to pair. Auth state is stored in `auth_info/` (git-ignored).
 
-Scan the displayed QR code with your WhatsApp mobile app. The session data will be saved to `auth_info.json`.
+CLI-only mode (no WhatsApp):
+```bash
+bun run src/index.ts --cli
+```
+
+## Build
+```bash
+bun run build       # bundles to dist/, entry: ./dist/run (Unix)
+bun run build-win   # bundles Windows-friendly files: dist\run-win.cmd
+```
 
 ## Project Structure
-- `src/index.ts`: Entry point, initializes Baileys socket, handles incoming messages, and interacts with OpenAI.
-- `.env.example`: Example environment variables.
-- `tsconfig.json`: TypeScript configuration.
----
-Feel free to customize and extend as needed!
+- `src/index.ts`: Entrypoint; starts Baileys bot + web UI (SSE on `/events`). Uses DeepSeek via OpenAI client.
+- `src/utils/`: Utilities such as `helpers.ts`.
+- `public/`: Static UI served by the app.
+- `scripts/build.mjs`: Bun bundling script; copies `.env` and `public/` to `dist/`.
+
+## Notes & Security
+- Configure via `.env`. Never commit secrets. Keep `auth_info/` private.
+- The bot logs minimal info; avoid adding PII to logs. Update the allowlist and clinic details in `src/index.ts` with care.

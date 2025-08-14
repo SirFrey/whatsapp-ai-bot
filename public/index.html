@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp AI Chatbot</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    #qr img { max-width: 100%; height: auto; }
+    #status { margin-bottom: 1em; font-weight: bold; }
+    #error-banner { display:none; background:#f44336; color:#fff; padding:8px; margin-bottom:1em; }
+    #stats { margin-top: 1em; }
+    #stats table { border-collapse: collapse; }
+    #stats th, #stats td { border: 1px solid #ccc; padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <h1>WhatsApp AI Chatbot</h1>
+  <div id="error-banner"></div>
+  <div id="status">Status: initializing...</div>
+  <div id="qr" style="display:none;">
+    <h2>Scan QR to connect</h2>
+    <img id="qr-img" alt="Scan QR code to connect" />
+  </div>
+  <div id="stats">
+    <h2>Runtime stats</h2>
+    <table>
+      <tbody>
+        <tr><th>Connected clients</th><td id="stat-clients">0</td></tr>
+        <tr><th>Active conversations</th><td id="stat-conversations">0</td></tr>
+        <tr><th>Total appointments</th><td id="stat-appointments">0</td></tr>
+        <tr><th>Bot number</th><td id="stat-bot">-</td></tr>
+        <tr><th>Manual overrides</th><td id="stat-manual">0</td></tr>
+        <tr><th>Uptime (hh:mm:ss)</th><td id="stat-uptime">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <script>
+    const statusEl = document.getElementById('status');
+    const qrImg = document.getElementById('qr-img');
+    const qrContainer = document.getElementById('qr');
+    const errorBanner = document.getElementById('error-banner');
+    const evtSource = new EventSource('/events');
+    evtSource.addEventListener('status', e => {
+      statusEl.textContent = 'Status: ' + e.data;
+    });
+    evtSource.addEventListener('qr', e => {
+      if (e.data) {
+        qrImg.src = e.data;
+        qrContainer.style.display = 'block';
+      } else {
+        qrImg.removeAttribute('src');
+        qrContainer.style.display = 'none';
+      }
+    });
+    evtSource.onerror = () => {
+      statusEl.textContent = 'Status: disconnected';
+      showError('Connection lost to server');
+    };
+
+    function showError(msg){
+      errorBanner.textContent = msg;
+      errorBanner.style.display='block';
+    }
+    function clearError(){
+      errorBanner.style.display='none';
+      errorBanner.textContent='';
+    }
+
+    evtSource.addEventListener('error', e=>{
+      if(e.data){
+        showError('Bot error: '+e.data);
+      }
+    });
+
+    evtSource.addEventListener('status', e=>{
+      if(e.data==='open'){
+        clearError();
+      }
+    });
+
+    function secondsToHms(d){
+      d = Number(d);
+      const h = Math.floor(d / 3600);
+      const m = Math.floor(d % 3600 / 60);
+      const s = Math.floor(d % 60);
+      return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+    }
+
+    evtSource.addEventListener('stats', e => {
+      try {
+        const data = JSON.parse(e.data);
+        document.getElementById('stat-clients').textContent = data.sseClients;
+        document.getElementById('stat-conversations').textContent = data.conversations;
+        document.getElementById('stat-appointments').textContent = data.appointments;
+        document.getElementById('stat-bot').textContent = data.botNumber || '-';
+        document.getElementById('stat-manual').textContent = data.manualOverrides;
+        document.getElementById('stat-uptime').textContent = secondsToHms(data.uptimeSec);
+      } catch {}
+    });
+  </script>
+</body>
+</html>
