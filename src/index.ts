@@ -1,7 +1,8 @@
 // Load environment variables from .env file
 import 'dotenv/config';
 import path from "path";
-import makeWASocket, {
+import {
+  makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -18,16 +19,66 @@ import fs from 'fs';
 // SSE clients to notify QR and status
 const sseClients: http.ServerResponse[] = [];
 
+// SSE helpers and runtime stats/logs
+const processStart = Date.now();
+let currentBotNumber: string | undefined;
+
+let statsInterval: ReturnType<typeof setInterval> | null = null;
+let activeSock: ReturnType<typeof makeWASocket> | null = null;
+let lastStatus: string = 'initializing';
+let lastQrDataUrl: string | null = null;
+let reconnectInProgress = false;
+let botStarting = false;
+
+type LogEntry = { level: 'info' | 'warn' | 'error'; msg: string; args: any[]; ts: string };
+const recentLogs: LogEntry[] = [];
+const MAX_RECENT_LOGS = 200;
+
+function sseBroadcast(event: string, data: string) {
+  const safeData = (data === undefined || data === null) ? '' : String(data);
+  for (const client of sseClients) {
+    try {
+      client.write(`event: ${event}\n`);
+      client.write(`data: ${safeData}\n\n`);
+    } catch {}
+  }
+}
+
+function broadcastStatus(status: string) {
+  lastStatus = status;
+  sseBroadcast('status', status);
+}
+
+function pushRecentLog(entry: LogEntry) {
+  recentLogs.push(entry);
+  if (recentLogs.length > MAX_RECENT_LOGS) recentLogs.shift();
+  try { sseBroadcast('log', JSON.stringify(entry)); } catch {}
+}
+
+function computeStats() {
+  let totalAppointments = 0;
+  for (const arr of appointments.values()) totalAppointments += Array.isArray(arr) ? arr.length : 0;
+  return {
+    sseClients: sseClients.length,
+    conversations: conversations.size,
+    appointments: totalAppointments,
+    botNumber: currentBotNumber || null,
+    manualOverrides: 0,
+    uptimeSec: Math.floor((Date.now() - processStart) / 1000),
+  };
+}
+
 function startWebServer(port = 3000) {
   const server = http.createServer((req, res) => {
-    if (req.url === '/' || req.url === '/index.html') {
+    const url = req.url || '/';
+    if (url === '/' || url === '/index.html') {
       const filePath = path.join(process.cwd(), 'public', 'index.html');
       fs.readFile(filePath, (err, data) => {
         if (err) return res.writeHead(500).end('Error loading index.html');
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(data);
       });
-    } else if (req.url === '/events') {
+    } else if (url === '/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -39,6 +90,73 @@ function startWebServer(port = 3000) {
         const i = sseClients.indexOf(res);
         if (i >= 0) sseClients.splice(i, 1);
       });
+      // Send initial snapshot: last logs and a stats sample
+      for (const entry of recentLogs) {
+        try {
+          res.write(`event: log\n`);
+          res.write(`data: ${JSON.stringify(entry)}\n\n`);
+        } catch {}
+      }
+      const snapshot = computeStats();
+      try {
+        res.write(`event: stats\n`);
+        res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+      } catch {}
+      // Send current status & QR snapshot
+      try {
+  res.write(`event: status\n`);
+  res.write(`data: ${(lastStatus || 'unknown')}\n\n`);
+} catch {}
+try {
+  res.write(`event: qr\n`);
+  res.write(`data: ${(lastQrDataUrl || '')}\n\n`);
+} catch {}
+    } else if (url === '/api/reconnect' && req.method === 'POST') {
+      // Manual reconnect without deleting auth
+      requestReconnect({ resetAuth: false });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } else if (url === '/api/reset-login' && req.method === 'POST') {
+      // Full reset: delete auth and restart
+      requestReconnect({ resetAuth: true });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } else if (url === '/api/snapshot' && req.method === 'GET') {
+      const body = {
+  status: lastStatus || 'unknown',
+  qrDataUrl: lastQrDataUrl || '',
+  stats: computeStats(),
+  logs: Array.isArray(recentLogs) ? recentLogs.slice(-100) : [],
+};
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    } else if (url.startsWith('/assets/')) {
+      // Serve static assets from public/assets
+      const normalized = path.normalize(url).replace(/^\.\.(\/|\\)/, '');
+      const relPath = normalized.replace(/^\/+/, ''); // strip leading '/'
+      const assetPath = path.join(process.cwd(), 'public', relPath);
+      // Ensure the path stays within public
+      const publicDir = path.join(process.cwd(), 'public');
+      if (!assetPath.startsWith(publicDir)) {
+        res.writeHead(403).end('Forbidden');
+        return;
+      }
+      fs.readFile(assetPath, (err, data) => {
+        if (err) {
+          res.writeHead(404).end('Not found');
+          return;
+        }
+        const ext = path.extname(assetPath).toLowerCase();
+        const ctype = ext === '.js' ? 'text/javascript; charset=utf-8'
+          : ext === '.css' ? 'text/css; charset=utf-8'
+          : ext === '.json' ? 'application/json'
+          : ext === '.png' ? 'image/png'
+          : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+          : ext === '.svg' ? 'image/svg+xml'
+          : 'application/octet-stream';
+        res.writeHead(200, { 'Content-Type': ctype });
+        res.end(data);
+      });
     } else {
       res.writeHead(404).end();
     }
@@ -47,6 +165,43 @@ function startWebServer(port = 3000) {
     logInfo(`Web server running at http://localhost:${port}`);
     import('open').then(open => open.default(`http://localhost:${port}`));
   });
+
+  // Periodic stats broadcast (once)
+  if (!statsInterval) {
+    statsInterval = setInterval(() => {
+      try {
+        const stats = computeStats();
+        sseBroadcast('stats', JSON.stringify(stats));
+      } catch {}
+    }, 1000);
+  }
+}
+
+function requestReconnect(opts: { resetAuth: boolean }) {
+  if (reconnectInProgress) {
+    logWarn('Reconnect already in progress, ignoring duplicate request.');
+    return;
+  }
+  reconnectInProgress = true;
+  if (opts.resetAuth) {
+    try {
+      fs.rmSync(authFolder, { recursive: true, force: true });
+      logWarn('Auth info removed by user request');
+    } catch (e) {
+      logError('Failed to remove auth info on reset-login:', e);
+    }
+  }
+  // Close existing socket if any
+  try {
+    if (activeSock && (activeSock as any).ws && typeof (activeSock as any).ws.close === 'function') {
+      (activeSock as any).ws.close();
+    }
+  } catch {}
+  broadcastStatus(opts.resetAuth ? 'logged_out' : 'reconnecting');
+  setTimeout(() => {
+    startWhatsAppBot();
+    // reconnectInProgress will be reset in startWhatsAppBot after connection update
+  }, 500);
 }
 
 // ========== CONFIG ==========
@@ -82,7 +237,7 @@ const contexts = new Map<string, BotContext>();
 const MAX_HISTORY = 20;
 
 // Allowed senders (numbers without '+')
-const ALLOWED_NUMBERS = ["+584242392804", "+584242479230" ].map((n) =>
+const ALLOWED_NUMBERS = ["+584242392804", "+584242479230","+584241739982", "+584241739982" ].map((n) =>
   n.replace(/^\+/, ""),
 );
 
@@ -170,12 +325,21 @@ const TOOL_GET_DATETIME = {
 } as const;
 
 // ---------- Logger ----------
-const logInfo = (msg: string, ...args: any[]) =>
-  console.log(`[${new Date().toISOString()}] [INFO] ${msg}`, ...args);
-const logWarn = (msg: string, ...args: any[]) =>
-  console.warn(`[${new Date().toISOString()}] [WARN] ${msg}`, ...args);
-const logError = (msg: string, ...args: any[]) =>
-  console.error(`[${new Date().toISOString()}] [ERROR] ${msg}`, ...args);
+const logInfo = (msg: string, ...args: any[]) => {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] [INFO] ${msg}`, ...args);
+  pushRecentLog({ level: 'info', msg, args, ts });
+};
+const logWarn = (msg: string, ...args: any[]) => {
+  const ts = new Date().toISOString();
+  console.warn(`[${ts}] [WARN] ${msg}`, ...args);
+  pushRecentLog({ level: 'warn', msg, args, ts });
+};
+const logError = (msg: string, ...args: any[]) => {
+  const ts = new Date().toISOString();
+  console.error(`[${ts}] [ERROR] ${msg}`, ...args);
+  pushRecentLog({ level: 'error', msg, args, ts });
+};
 
 // WA auth state directory
 const authFolder = path.resolve(process.cwd(), "auth_info");
@@ -427,11 +591,17 @@ async function handleIncomingMessage(
 
 // ========== WHATSAPP MODE ==========
 async function startWhatsAppBot() {
+  if (botStarting) {
+    logWarn('Bot is already starting, skipping duplicate startWhatsAppBot call.');
+    return;
+  }
+  botStarting = true;
   const { version, isLatest } = await fetchLatestBaileysVersion();
   logInfo(`Using WA version ${version.join(".")}, isLatest: ${isLatest}`);
 
   const { state, saveCreds } = await useMultiFileAuthState(authFolder);
   const sock = makeWASocket({ version, auth: state });
+  activeSock = sock;
 
   const sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
@@ -469,6 +639,13 @@ async function startWhatsAppBot() {
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update as any;
+    try {
+      // capture our bot number when available
+      if ((sock as any).user?.id) {
+        const jid: string = (sock as any).user.id;
+        currentBotNumber = jid.split('@')[0];
+      }
+    } catch {}
     if (qr) {
       try {
         const qrCode = await qrcode.toString(qr, {
@@ -479,34 +656,54 @@ async function startWhatsAppBot() {
         // send QR image to web UI
         try {
           const dataUrl = await qrcode.toDataURL(qr);
-          sseClients.forEach(client => client.write(`event: qr\ndata: ${dataUrl}\n\n`));
+          lastQrDataUrl = dataUrl;
+          sseBroadcast('qr', dataUrl);
         } catch {}
       } catch (err) {
         logError("Failed to generate QR code", err);
       }
     }
     if (connection === "close") {
-      const status = (lastDisconnect?.error as any)?.output?.statusCode;
+      botStarting = false;
+      // Check for Baileys stream:error conflict (session replaced)
+      const error = lastDisconnect?.error as any;
+      const status = error?.output?.statusCode;
+      const isConflict = error?.message?.includes('conflict') || (error?.output?.payload && String(error.output.payload).includes('conflict'));
+      if (isConflict) {
+        logError("WhatsApp session conflict detected (stream:error type replaced). Stopping auto-reconnect. You are likely logged in elsewhere.");
+        broadcastStatus('conflict');
+        reconnectInProgress = false;
+        return;
+      }
       if (status === DisconnectReason.loggedOut) {
         logError("Logged out. Deleting auth_info and restarting for fresh login.");
         // notify status to web UI
-        sseClients.forEach(client => client.write(`event: status\ndata: logged_out\n\n`));
+        broadcastStatus('logged_out');
         // Delete auth_info folder and restart
         try {
           fs.rmSync(authFolder, { recursive: true, force: true });
         } catch (e) {
           logError("Failed to delete auth_info folder:", e);
         }
-        setTimeout(() => startWhatsAppBot(), 2000);
+        setTimeout(() => {
+          reconnectInProgress = false;
+          startWhatsAppBot();
+        }, 2000);
       } else {
         // Try to reconnect automatically
-        setTimeout(() => startWhatsAppBot(), 2000);
-        sseClients.forEach(client => client.write(`event: status\ndata: close\n\n`));
+        setTimeout(() => {
+          reconnectInProgress = false;
+          startWhatsAppBot();
+        }, 2000);
+        broadcastStatus('close');
       }
     } else if (connection === "open") {
+      botStarting = false;
       logInfo("Connected to WhatsApp");
-      // notify status to web UI
-      sseClients.forEach(client => client.write(`event: status\ndata: open\n\n`));
+      lastQrDataUrl = null; // no need to show QR while connected
+      broadcastStatus('open');
+      reconnectInProgress = false;
+      if (currentBotNumber) logInfo(`Bot number: ${currentBotNumber}`);
     }
   });
 
@@ -524,8 +721,10 @@ async function startWhatsAppBot() {
     const text =
       message.message.conversation || message.message.extendedTextMessage?.text;
     if (!text) return;
+  logInfo(`Incoming message from ${remoteNumber}: ${text}`);
 
     await handleIncomingMessage(from, remoteNumber, text, async (reply) => {
+  logInfo(`Sending reply to ${remoteNumber}`);
       await humanSend(from, reply);
     });
   });

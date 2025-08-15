@@ -1,0 +1,24 @@
+/* App-level overrides and small utilities */
+:root {
+  --card-radius: 10px;
+}
+
+main { max-width: 900px; margin: 2rem auto; }
+.card { border: 1px solid #e6e6e6; border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1.25rem; background: #fff; box-shadow: 0 2px 8px #0001; }
+.flex-row { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.flex-col { flex: 1 1 320px; min-width: 280px; }
+
+#qr-img { max-width: 100%; height: auto; }
+#status { font-weight: 600; }
+#error-banner { display:none; background:#d32f2f; color:#fff; padding:10px 12px; margin-bottom:1rem; border-radius: 6px; }
+footer { text-align: center; color: #888; margin: 2rem 0; font-size: 0.95rem; }
+
+/* Badge-like status */
+.badge { display:inline-block; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.85rem; }
+.badge.ok { background:#e8f5e9; color:#2e7d32; }
+.badge.warn { background:#fff8e1; color:#f57f17; }
+.badge.err { background:#ffebee; color:#c62828; }
+
+/* Simple grid for widgets */
+.widgets { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+.widget { border: 1px dashed #e0e0e0; border-radius: 8px; padding: .75rem; color:#666; }
