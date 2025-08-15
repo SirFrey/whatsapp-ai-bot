@@ -42,7 +42,17 @@
     const errorBanner = document.getElementById('error-banner');
     const evtSource = new EventSource('/events');
     evtSource.addEventListener('status', e => {
-      statusEl.textContent = 'Status: ' + e.data;
+      if (e.data === 'logged_out') {
+        statusEl.textContent = 'Status: LOGGED OUT. Reconectando...';
+        showError('El bot fue desconectado de WhatsApp. Intentando reconectar automáticamente...');
+      } else if (e.data === 'close') {
+        statusEl.textContent = 'Status: disconnected';
+      } else if (e.data === 'open') {
+        statusEl.textContent = 'Status: connected';
+        clearError();
+      } else {
+        statusEl.textContent = 'Status: ' + e.data;
+      }
     });
     evtSource.addEventListener('qr', e => {
       if (e.data) {

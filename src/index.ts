@@ -5,12 +5,12 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  proto,
 } from "baileys";
 import OpenAI from "openai";
 import qrcode from "qrcode";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { calRequest, summarizeCalResult, ToolLogEvent } from "./utils/cal";
 
 // -------- Web UI server & SSE for QR/status --------
 import http from 'http';
@@ -66,12 +66,8 @@ const openai = new OpenAI({
 });
 
 // Conversation history map per chat
-type ChatMessage = {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  name?: string;
-  tool_call_id?: string;
-};
+import type { ChatCompletionMessageParam, ChatCompletionToolMessageParam } from "openai/resources/chat/completions";
+type ChatMessage = ChatCompletionMessageParam;
 const conversations = new Map<string, ChatMessage[]>();
 
 // Structured context per chat (not MCP spec)
@@ -100,17 +96,17 @@ const SYSTEM_PROMPT =
   "Si el usuario no desea reservar pero hace preguntas sobre limpieza dental, horarios de atención, dirección u otros temas relacionados con odontología, proporciona información relevante sin mencionar el enlace de reserva. " +
   "Si el usuario aborda temas no relacionados con odontología, infórmale amablemente que solo puedes ayudar con información y gestión de reservas odontologicas, y redirígelo al tema principal. " +
   "IMPORTANTE: Cuando el usuario pregunte sobre precios, servicios disponibles o costos, siempre consulta y proporciona la información de nuestra lista oficial de precios. Estos son TODOS los servicios y precios que ofrecemos: " +
-  "🔹 Consulta: 10$ " +
-  "🔹 Consulta + Limpieza dental con ultrasonido 25$ " +
-  "🔹 Ortodoncia superior e inferior: 100$ (Incluye consulta + limpieza dental con ultrasonido) " +
-  "🔹 Eliminación de caries y restauraciones con resina en dientes permanente (adulto) entre: 20$, 25$, 30$, 35$, 40$ o 45$ " +
-  "🔹 Eliminación de caries y restauraciones con resina en dientes temporales (niños) entre 20$/25$/30$ " +
-  "🔹 Endodoncia Monoradicular o Multirradicular: 150$/250$ " +
-  "🔹 Extracciones: Dientes temporales (Niños): 20$/25$/30$, Dientes permanentes: (adulto) 30$/35$, Extracción de Cordales entre: 50$ y 80$ " +
-  "🔹 Gingivectomia (recorte de encía) 60$ " +
-  "🔹 Frenilectomia (Recorte de frenillo) 60$ " +
-  "🔹 Prótesis Dental (debe asistir a consulta para evaluar que tipo de prótesis necesita) " +
-  "🔹 Realizamos Retenedores: 85$ " +
+  "Consulta: 10$ " +
+  "Consulta + Limpieza dental con ultrasonido 25$ " +
+  "Ortodoncia superior e inferior: 100$ (Incluye consulta + limpieza dental con ultrasonido) " +
+  "Eliminación de caries y restauraciones con resina en dientes permanente (adulto) entre: 20$, 25$, 30$, 35$, 40$ o 45$ " +
+  "Eliminación de caries y restauraciones con resina en dientes temporales (niños) entre 20$/25$/30$ " +
+  "Endodoncia Monoradicular o Multirradicular: 150$/250$ " +
+  "Extracciones: Dientes temporales (Niños): 20$/25$/30$, Dientes permanentes: (adulto) 30$/35$, Extracción de Cordales entre: 50$ y 80$ " +
+  "Gingivectomia (recorte de encía) 60$ " +
+  "Frenilectomia (Recorte de frenillo) 60$ " +
+  "Prótesis Dental (debe asistir a consulta para evaluar que tipo de prótesis necesita) " +
+  "Realizamos Retenedores: 85$ " +
   "Trabajamos previa cita. Utiliza esta información de precios para responder consultas sobre costos y ayudar a los pacientes a entender qué servicios ofrecemos. " +
   "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda.";
 
@@ -130,62 +126,7 @@ type Appointment = {
 const appointments = new Map<string, Appointment[]>();
 
 // ---------- Tools (Tools API) ----------
-// ---- Cal.com Tools ----
-const TOOL_CAL_GET_SLOTS = {
-  type: "function",
-  function: {
-    name: "cal_get_slots",
-    description:
-      "Obtiene slots disponibles para un Event Type. Acepta eventTypeId o (username + eventTypeSlug). Devuelve la respuesta cruda de Cal.com.",
-    parameters: {
-      type: "object",
-      properties: {
-        eventTypeId: { type: "number", description: "ID del event type" },
-        username: {
-          type: "string",
-          description: "username del usuario en Cal.com",
-        },
-        eventTypeSlug: { type: "string", description: "slug del event type" },
-        start: {
-          type: "string",
-          description: "ISO date (YYYY-MM-DD) o ISO datetime",
-        },
-        end: {
-          type: "string",
-          description: "ISO date (YYYY-MM-DD) o ISO datetime",
-        },
-        timeZone: {
-          type: "string",
-          description: "Zona IANA (ej. America/Caracas)",
-        },
-      },
-      required: ["start", "end"],
-    },
-  },
-} as const;
-
-const TOOL_CAL_GET_SCHEDULES = {
-  type: "function",
-  function: {
-    name: "cal_get_schedules",
-    description:
-      "Lista los schedules (horarios/availability) del usuario autenticado, incluyendo timeZone y bloques por día.",
-    parameters: { type: "object", properties: {} },
-  },
-} as const;
-
-const TOOL_CAL_GET_EVENT_TYPES = {
-  type: "function",
-  function: {
-    name: "cal_get_event_types",
-    description:
-      "Lista los event types del usuario (duración, buffers, scheduleId, etc.) para que el asistente entienda qué ofrecer.",
-    parameters: { type: "object", properties: {} },
-  },
-} as const;
-
 // 1) Create appointment (function tool)
-// Tool to generate a Cal.com booking link after collecting user data
 const TOOL_GENERATE_BOOK_URL = {
   type: "function",
   function: {
@@ -280,10 +221,10 @@ function buildTimeAnchor(tz?: string, locale = "es-VE") {
 // ---------- Agent executor (Tools API with tool_calls) ----------
 async function runAgent(
   messagesForAPI: ChatMessage[],
-  options?: { onTool?: (e: ToolLogEvent) => void; forceGetTime?: boolean },
+  options?: { onTool?: (e: any) => void; forceGetTime?: boolean },
 ) {
   const MAX_STEPS = 3;
-  let msgs = [...messagesForAPI];
+  let msgs: ChatCompletionMessageParam[] = [...messagesForAPI];
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const completion = await openai.chat.completions.create({
@@ -292,19 +233,16 @@ async function runAgent(
       tools: [
         TOOL_GENERATE_BOOK_URL,
         TOOL_GET_DATETIME,
-        TOOL_CAL_GET_SLOTS,
-        TOOL_CAL_GET_SCHEDULES,
-        TOOL_CAL_GET_EVENT_TYPES,
       ],
       tool_choice: options?.forceGetTime
         ? { type: "function", function: { name: "get_datetime" } }
         : "auto",
     });
 
-    const choice = completion.choices?.[0]?.message;
+    const choice = completion.choices?.[0]?.message as ChatCompletionMessageParam & { tool_calls?: any[] };
     if (!choice) return { type: "final", content: "No response." } as const;
 
-    const calls = choice.tool_calls;
+    const calls = (choice as any).tool_calls;
     if (calls && calls.length) {
       // MUST push the assistant message that contains tool_calls first (per Tools API).
       msgs.push(choice);
@@ -318,7 +256,7 @@ async function runAgent(
         } catch {}
 
         try {
-            if (fn === "generate_booking_url") {
+          if (fn === "generate_booking_url") {
             // Build Cal.com booking link using provided name and service
             options?.onTool?.({ source: "appt", phase: "call", name: fn!, args });
             const { name, service } = args;
@@ -346,12 +284,12 @@ async function runAgent(
               arguments: JSON.stringify(result),
             } as const;
           } else {
-            msgs.push({
+            const toolMsg: ChatCompletionToolMessageParam = {
               role: "tool",
               tool_call_id: tc.id,
-              name: fn ?? "unknown",
               content: JSON.stringify({ error: `Unknown tool: ${fn}` }),
-            });
+            };
+            msgs.push(toolMsg);
           }
         } catch (err) {
           options?.onTool?.({
@@ -361,21 +299,21 @@ async function runAgent(
             args,
             error: String(err),
           });
-          msgs.push({
+          const toolMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             tool_call_id: tc.id,
-            name: fn ?? "unknown",
             content: JSON.stringify({
               error: "Tool execution error",
               detail: String(err),
             }),
-          });
+          };
+          msgs.push(toolMsg);
         }
       }
       continue; // let the model read tool outputs and produce a final reply
     }
 
-    if (choice.content?.trim()) {
+    if (typeof choice.content === "string" && choice.content.trim()) {
       return { type: "final", content: choice.content.trim() } as const;
     }
   }
@@ -391,8 +329,8 @@ async function handleIncomingMessage(
   chatId: string,
   userVisibleSender: string,
   text: string,
-  sendFn: (text: string) => Promise<void> | void,
-  opts?: { onTool?: (e: ToolLogEvent) => void },
+  sendFn: (msg: any) => Promise<void> | void,
+  opts?: { onTool?: (e: any) => void },
 ) {
   if (text.length > MAX_INPUT_LENGTH) {
     await sendFn(
@@ -418,7 +356,7 @@ async function handleIncomingMessage(
       appointmentHistory: appointments.get(chatId) || [],
       clinic: {
         hours: "Lun-Vie 9:00-18:00",
-        address: "Calle Falsa 123",
+        address: "Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda",
         tz: DEFAULT_TZ,
       },
     });
@@ -497,16 +435,7 @@ async function startWhatsAppBot() {
 
   const sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
-  async function humanSend(
-    to: string,
-    text: string,
-    // Buttons are optional and may be unsupported in some library versions
-    buttons?: {
-      buttonId: string;
-      buttonText: { displayText: string };
-      type: number;
-    }[],
-  ) {
+  async function humanSend(to: string, msg: any) {
     // Subscribe to presence updates and indicate typing
     try {
       await sock.presenceSubscribe(to);
@@ -516,19 +445,21 @@ async function startWhatsAppBot() {
     } catch {}
     await sleep(800);
     try {
-      if (buttons?.length) {
-        // Best-effort: if unsupported, fall back to plain text
-        await sock.sendMessage(to, {
-          text,
-          footer: "Por favor selecciona una opción:",
-          buttons,
-          headerType: 1,
-        });
+      if (typeof msg === 'string') {
+        await sock.sendMessage(to, { text: msg });
+      } else if (msg && typeof msg === 'object') {
+        // Allow custom nodes like templateMessage or viewOnce->interactiveMessage
+        await sock.sendMessage(to, msg as any);
       } else {
-        await sock.sendMessage(to, { text });
+        await sock.sendMessage(to, { text: 'Ocurrió un error al generar el mensaje de reserva. Por favor intenta nuevamente.' });
       }
-    } catch {
-      await sock.sendMessage(to, { text }); // fallback
+    } catch (err) {
+      logError('Fallo sock.sendMessage:', err);
+      try {
+        await sock.sendMessage(to, { text: 'Ocurrió un error al enviar el mensaje. Intenta nuevamente.' });
+      } catch (err2) {
+        logError('Fallo sock.sendMessage (fallback):', err2);
+      }
     }
     // Indicate typing stopped
     try {
@@ -556,10 +487,22 @@ async function startWhatsAppBot() {
     }
     if (connection === "close") {
       const status = (lastDisconnect?.error as any)?.output?.statusCode;
-      if (status !== DisconnectReason.loggedOut) startWhatsAppBot();
-      else logError("Logged out. Please delete auth_info and restart.");
-      // notify status to web UI
-      sseClients.forEach(client => client.write(`event: status\ndata: close\n\n`));
+      if (status === DisconnectReason.loggedOut) {
+        logError("Logged out. Deleting auth_info and restarting for fresh login.");
+        // notify status to web UI
+        sseClients.forEach(client => client.write(`event: status\ndata: logged_out\n\n`));
+        // Delete auth_info folder and restart
+        try {
+          fs.rmSync(authFolder, { recursive: true, force: true });
+        } catch (e) {
+          logError("Failed to delete auth_info folder:", e);
+        }
+        setTimeout(() => startWhatsAppBot(), 2000);
+      } else {
+        // Try to reconnect automatically
+        setTimeout(() => startWhatsAppBot(), 2000);
+        sseClients.forEach(client => client.write(`event: status\ndata: close\n\n`));
+      }
     } else if (connection === "open") {
       logInfo("Connected to WhatsApp");
       // notify status to web UI
@@ -567,9 +510,7 @@ async function startWhatsAppBot() {
     }
   });
 
-  sock.ev.on("connection.error", (err) =>
-    logError("Socket connection error:", err),
-  );
+  // Remove invalid event handler for connection.error
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("messages.upsert", async (m) => {
@@ -600,7 +541,7 @@ async function startCliChat() {
     "CLI chat iniciado. Comandos: '/reset', '/tz <IANA>', '/exit'.\n",
   );
 
-  const cliToolLogger = (e: ToolLogEvent) => {
+  const cliToolLogger = (e: any) => {
     const ts = new Date().toISOString();
     if (e.source === "cal") {
       if (e.phase === "call") {
