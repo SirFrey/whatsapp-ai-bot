@@ -98,7 +98,21 @@ const SYSTEM_PROMPT =
   "No envíes el enlace de reserva hasta haber recibido y confirmado ambos datos (servicio y nombre). " +
   "Cuando los obtengas, llama a la función generate_booking_url con los parámetros name y service, y comparte el enlace para que el usuario elija fecha y hora. " +
   "Si el usuario no desea reservar pero hace preguntas sobre limpieza dental, horarios de atención, dirección u otros temas relacionados con odontología, proporciona información relevante sin mencionar el enlace de reserva. " +
-  "Si el usuario aborda temas no relacionados con odontología, infórmale amablemente que solo puedes ayudar con información y gestión de reservas odontologicas, y redirígelo al tema principal.";
+  "Si el usuario aborda temas no relacionados con odontología, infórmale amablemente que solo puedes ayudar con información y gestión de reservas odontologicas, y redirígelo al tema principal. " +
+  "IMPORTANTE: Cuando el usuario pregunte sobre precios, servicios disponibles o costos, siempre consulta y proporciona la información de nuestra lista oficial de precios. Estos son TODOS los servicios y precios que ofrecemos: " +
+  "🔹 Consulta: 10$ " +
+  "🔹 Consulta + Limpieza dental con ultrasonido 25$ " +
+  "🔹 Ortodoncia superior e inferior: 100$ (Incluye consulta + limpieza dental con ultrasonido) " +
+  "🔹 Eliminación de caries y restauraciones con resina en dientes permanente (adulto) entre: 20$, 25$, 30$, 35$, 40$ o 45$ " +
+  "🔹 Eliminación de caries y restauraciones con resina en dientes temporales (niños) entre 20$/25$/30$ " +
+  "🔹 Endodoncia Monoradicular o Multirradicular: 150$/250$ " +
+  "🔹 Extracciones: Dientes temporales (Niños): 20$/25$/30$, Dientes permanentes: (adulto) 30$/35$, Extracción de Cordales entre: 50$ y 80$ " +
+  "🔹 Gingivectomia (recorte de encía) 60$ " +
+  "🔹 Frenilectomia (Recorte de frenillo) 60$ " +
+  "🔹 Prótesis Dental (debe asistir a consulta para evaluar que tipo de prótesis necesita) " +
+  "🔹 Realizamos Retenedores: 85$ " +
+  "Trabajamos previa cita. Utiliza esta información de precios para responder consultas sobre costos y ayudar a los pacientes a entender qué servicios ofrecemos. " +
+  "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda.";
 
 // Rate limiting
 const RATE_LIMIT_MS = 2_000;
@@ -580,7 +594,7 @@ async function startWhatsAppBot() {
 async function startCliChat() {
   const rl = readline.createInterface({ input, output });
   const chatId = "cli";
-  const userLabel = "terminal";
+  const userLabel = "+584242057621";
 
   console.log(
     "CLI chat iniciado. Comandos: '/reset', '/tz <IANA>', '/exit'.\n",
