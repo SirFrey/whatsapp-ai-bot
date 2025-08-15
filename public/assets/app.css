@@ -1,24 +1,54 @@
-/* App-level overrides and small utilities */
-:root {
-  --card-radius: 10px;
+
+/* Minimal custom styles for card, badge, and error banner (now using Tailwind for layout/colors) */
+.card {
+  border-radius: 0.75rem;
+  box-shadow: 0 2px 12px #0002;
+  background: #fff;
 }
-
-main { max-width: 900px; margin: 2rem auto; }
-.card { border: 1px solid #e6e6e6; border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1.25rem; background: #fff; box-shadow: 0 2px 8px #0001; }
-.flex-row { display: flex; gap: 1.25rem; flex-wrap: wrap; }
-.flex-col { flex: 1 1 320px; min-width: 280px; }
-
-#qr-img { max-width: 100%; height: auto; }
-#status { font-weight: 600; }
-#error-banner { display:none; background:#d32f2f; color:#fff; padding:10px 12px; margin-bottom:1rem; border-radius: 6px; }
-footer { text-align: center; color: #888; margin: 2rem 0; font-size: 0.95rem; }
-
-/* Badge-like status */
-.badge { display:inline-block; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.85rem; }
-.badge.ok { background:#e8f5e9; color:#2e7d32; }
-.badge.warn { background:#fff8e1; color:#f57f17; }
-.badge.err { background:#ffebee; color:#c62828; }
-
-/* Simple grid for widgets */
-.widgets { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
-.widget { border: 1px dashed #e0e0e0; border-radius: 8px; padding: .75rem; color:#666; }
+.badge {
+  display: inline-block;
+  padding: 0.18rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.badge.ok {
+  background: #e0fbe6;
+  color: #22c55e;
+  border: 1px solid #b6f2c7;
+}
+.badge.warn {
+  background: #fffbe6;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+.badge.err {
+  background: #ffe4e6;
+  color: #ef4444;
+  border: 1px solid #fecaca;
+}
+.widgets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.2rem;
+}
+.widget {
+  border: 1.5px dashed #c7d2fe;
+  border-radius: 10px;
+  padding: 1rem 0.75rem 0.75rem 0.75rem;
+  color: #64748b;
+  background: #f8fafc;
+  box-shadow: 0 1px 4px #2563eb11;
+}
+#error-banner {
+  display: none;
+  background: #ef4444;
+  color: #fff;
+  padding: 12px 16px;
+  margin-bottom: 1.25rem;
+  border-radius: 8px;
+  font-weight: 500;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
