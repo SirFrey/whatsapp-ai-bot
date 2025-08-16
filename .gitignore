@@ -1,5 +1,25 @@
+# Dependencies
 node_modules/
 bun.lockb
+package-lock.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# Build outputs
 dist/
+dist-obfuscated/
+dist-secure/
+dist-user/
+
+# Environment and secrets
 .env
 auth_info/
+
+# Secure packaging
+*.enc
+*.key
+core.enc
+
+# OS files
+.DS_Store
+Thumbs.db

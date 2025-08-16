@@ -1,0 +1,13 @@
+# Files to hide from end users
+src/
+node_modules/
+.git/
+scripts/
+tsconfig.json
+package.json
+package-lock.json
+bun.lockb
+*.log
+.env.example
+README.md
+QUICK_START.md

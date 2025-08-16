@@ -1,16 +1,32 @@
 {
   "name": "whatsapp-ai-chatbot",
   "version": "1.0.0",
+  "description": "AI-powered WhatsApp chatbot for dental clinic automation",
   "type": "module",
+  "main": "dist/index.js",
   "scripts": {
     "start": "bun run src/index.ts",
-    "web": "bun run src/index.ts",
-    "build": "node scripts/build.mjs",
-    "build-win": "node scripts/build.mjs --win",
-    "build:ts": "tsc -p tsconfig.json",
+    "dev": "bun run src/index.ts",
     "dev:node": "tsx watch src/index.ts",
-    "start:node": "node dist/index.js"
+    "build": "tsc -p tsconfig.json",
+    "build:obfuscated": "npm run build && node scripts/obfuscate.mjs",
+    "package:secure": "npm run build:obfuscated && node scripts/create-secure-package.mjs",
+    "package:user": "chmod +x build/create-package.sh && ./build/create-package.sh",
+    "setup": "node build/setup.js",
+    "start:prod": "node dist/index.js",
+    "clean": "rm -rf dist dist-obfuscated dist-secure dist-user",
+    "test": "echo \"No tests specified\" && exit 0"
   },
+  "keywords": [
+    "whatsapp",
+    "chatbot",
+    "ai",
+    "dental",
+    "automation",
+    "baileys"
+  ],
+  "author": "SirFrey",
+  "license": "MIT",
   "dependencies": {
     "@types/qrcode": "^1.5.5",
     "baileys": "^6.7.18",
@@ -22,7 +38,13 @@
   "devDependencies": {
     "@types/node": "^20.14.11",
     "tsx": "^4.15.7",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "javascript-obfuscator": "^4.1.0",
+    "terser": "^5.30.0",
+    "uglify-js": "^3.17.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "packageManager": "pnpm@10.12.4+sha512.5ea8b0deed94ed68691c9bad4c955492705c5eeb8a87ef86bc62c74a26b037b08ff9570f108b2e4dbd1dd1a9186fea925e527f141c648e85af45631074680184"
 }
