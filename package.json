@@ -6,6 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "tsx src/index.ts",
+    "start:node": "node --loader ts-node/esm src/index.ts",
+    "start:build": "npm run build && node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "dev:watch": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
@@ -38,6 +40,7 @@
   "devDependencies": {
     "@types/node": "^20.14.11",
     "tsx": "^4.15.7",
+    "ts-node": "^10.9.1",
     "typescript": "^5.5.4",
     "javascript-obfuscator": "^4.1.0",
     "terser": "^5.30.0",
