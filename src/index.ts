@@ -365,7 +365,7 @@ const contexts = new Map<string, BotContext>();
 const MAX_HISTORY = 20;
 
 // Allowed senders (numbers without '+')
-const ALLOWED_NUMBERS = ["+584242392804", "+584242479230","+584241739982", "+584241739982" ].map((n) =>
+const ALLOWED_NUMBERS = [].map((n) =>
   n.replace(/^\+/, ""),
 );
 
