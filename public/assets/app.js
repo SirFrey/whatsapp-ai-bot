@@ -1,75 +1,126 @@
 import { openSSE, secondsToHms } from './sse.js'
 import { setStatus, showQR, hideQR, showQRLoading, showError, clearError, updateStats, appendLog, clearLogs, els, apiPost } from './ui.js'
 
+console.log('App.js loaded successfully')
+
+// Connection state management
+let isConnected = false
+let retryCount = 0
+const maxRetries = 5
+
 // Initial snapshot to render UI immediately on refresh
-(async () => {
+async function loadInitialSnapshot() {
 	try {
-		const res = await fetch('/api/snapshot')
+		console.log('Loading initial snapshot...')
+		
+		const res = await fetch('/api/snapshot', {
+			headers: {
+				'Cache-Control': 'no-cache'
+			}
+		})
+
 		if (res.ok) {
 			const snap = await res.json()
-			setStatus(snap.status || 'unknown')
+			console.log('Initial snapshot loaded:', snap)
 
-			// Handle QR code display logic
+			// Set status with better handling
+			setStatus(snap.status || 'initializing')
+
+			// Enhanced QR code display logic
 			if (snap.qrDataUrl && typeof snap.qrDataUrl === 'string' && snap.qrDataUrl.length > 20) {
 				showQR(snap.qrDataUrl)
 			} else {
 				// If no QR data but status suggests we need authentication, show loading state
-				if (snap.status === 'initializing' || snap.status === 'connecting' || snap.status === 'unknown') {
+				const status = snap.status || 'initializing'
+				if (status === 'initializing' || status === 'connecting' || status === 'unknown' || status === 'close') {
 					showQRLoading()
 				} else {
 					hideQR()
 				}
 			}
 
-			if (snap.stats) {
+			// Update stats with validation
+			if (snap.stats && typeof snap.stats === 'object') {
 				updateStats({
-					sseClients: snap.stats.sseClients,
-					conversations: snap.stats.conversations,
-					appointments: snap.stats.appointments,
-					botNumber: snap.stats.botNumber,
-					manualOverrides: snap.stats.manualOverrides,
-					uptimeHms: secondsToHms(snap.stats.uptimeSec)
+					sseClients: snap.stats.sseClients || 0,
+					conversations: snap.stats.conversations || 0,
+					appointments: snap.stats.appointments || 0,
+					botNumber: snap.stats.botNumber || null,
+					manualOverrides: snap.stats.manualOverrides || 0,
+					uptimeHms: secondsToHms(snap.stats.uptimeSec || 0)
 				})
 			}
+
+			// Load logs with validation
 			if (Array.isArray(snap.logs)) {
-				snap.logs.forEach(entry => { try { appendLog(entry) } catch { } })
+				snap.logs.forEach(entry => {
+					try {
+						appendLog(entry)
+					} catch (error) {
+						console.warn('Error appending log entry:', error)
+					}
+				})
 			}
+
+			isConnected = true
+			retryCount = 0
 		} else {
-			// If we can't get snapshot, assume we need to show QR section for first-time setup
+			console.warn('Failed to load snapshot:', res.status, res.statusText)
+			// Fallback state for when we can't get snapshot
 			setStatus('conectando')
 			showQRLoading()
 		}
-	} catch {
-		// If there's an error fetching snapshot, assume we need QR for initial setup
+	} catch (error) {
+		console.error('Error loading initial snapshot:', error)
+		// Fallback state for when we can't get snapshot
 		setStatus('conectando')
 		showQRLoading()
 	}
-})()
+}
 
-// Single SSE connection wired to UI updates
+// Call the function
+loadInitialSnapshot()
+
+// SSE connection with error handling
 const es = openSSE('/events', {
 	status: e => {
 		const data = e.data
+		console.log('Status update:', data)
+		
 		if (data === 'logged_out') {
 			setStatus('DESCONECTADO. Reconectando...')
 			showError('El bot fue desconectado de WhatsApp. Intentando reconectar automáticamente...')
+			showQRLoading()
 		} else if (data === 'close') {
 			setStatus('desconectado')
 			showError('Desconectado de WhatsApp. Puedes intentar reconectar.')
+			showQRLoading()
 		} else if (data === 'open') {
 			setStatus('conectado')
 			clearError()
+			hideQR()
+		} else if (data === 'conflict') {
+			setStatus('conflicto')
+			showError('Sesión duplicada detectada. Ya hay una sesión activa en otro lugar.')
+			hideQR()
 		} else {
 			setStatus(data)
+			
+			// Handle QR loading state based on status
+			if (data === 'initializing' || data === 'connecting' || data === 'reconnecting') {
+				showQRLoading()
+			}
 		}
 	},
 	qr: e => {
+		console.log('QR update:', e.data ? 'QR received' : 'QR cleared')
+		
 		if (e.data && typeof e.data === 'string' && e.data.length > 20) {
 			showQR(e.data)
 		} else {
 			// If QR data is empty but we're in a state that might need QR, show loading
-			const currentStatus = els.status.textContent || ''
-			if (currentStatus.includes('conectando') || currentStatus.includes('inicializando')) {
+			const currentStatus = els.status ? els.status.textContent || '' : ''
+			if (currentStatus.includes('conectando') || currentStatus.includes('inicializando') || currentStatus.includes('desconectado')) {
 				showQRLoading()
 			} else {
 				hideQR()
@@ -77,20 +128,40 @@ const es = openSSE('/events', {
 		}
 	},
 	error: e => {
+		console.error('Bot error received:', e.data)
 		if (e.data) showError('Error del bot: ' + e.data)
 	},
 	log: e => {
-		try { appendLog(JSON.parse(e.data)) } catch { }
+		try { 
+			const logData = JSON.parse(e.data)
+			appendLog(logData)
+		} catch (error) {
+			console.warn('Error parsing log data:', error)
+		}
+	},
+	ready: e => {
+		console.log('SSE ready signal received')
+		isConnected = true
+		retryCount = 0
+		clearError()
 	}
 })
 
-es.onerror = () => {
-	setStatus('desconectado')
-	showError('Conexión perdida con el servidor. Intenta Reconectar o Reiniciar sesión.')
+// Error handling for SSE connection
+es.onerror = (event) => {
+	console.error('SSE connection error:', event)
+	isConnected = false
+	
+	if (es.readyState === EventSource.CLOSED) {
+		setStatus('desconectado')
+		showError('Conexión perdida con el servidor.')
+	}
 }
 
 es.onopen = () => {
-	// UI connected to backend; keep status consistent but clear stale errors
+	console.log('SSE connection opened')
+	isConnected = true
+	retryCount = 0
 	clearError()
 }
 
@@ -98,41 +169,39 @@ es.addEventListener('stats', e => {
 	try {
 		const payload = JSON.parse(e.data)
 		updateStats({
-			sseClients: payload.sseClients,
-			conversations: payload.conversations,
-			appointments: payload.appointments,
-			botNumber: payload.botNumber,
-			manualOverrides: payload.manualOverrides,
-			uptimeHms: secondsToHms(payload.uptimeSec)
+			sseClients: payload.sseClients || 0,
+			conversations: payload.conversations || 0,
+			appointments: payload.appointments || 0,
+			botNumber: payload.botNumber || null,
+			manualOverrides: payload.manualOverrides || 0,
+			uptimeHms: secondsToHms(payload.uptimeSec || 0)
 		})
-	} catch { }
+	} catch (e) {
+		console.warn('Error updating stats:', e)
+	}
 })
 
-// UI actions: Reconnect and Reset login
+// Button event handlers
 if (els.btnReconnect) {
 	els.btnReconnect.addEventListener('click', async () => {
 		try {
 			setStatus('reconectando...')
 			await apiPost('/api/reconnect')
-			showError('Reconectando… si no se conecta, intenta Reiniciar sesión.')
-		} catch { }
-	})
-}
-if (els.btnResetLogin) {
-	els.btnResetLogin.addEventListener('click', async () => {
-		try {
-			if (!confirm('Esto desvinculará la sesión actual. ¿Continuar?')) return
-			setStatus('reiniciando sesión...')
-			await apiPost('/api/reset-login')
-			showError('Sesión reiniciada. Escanea el código QR para conectar nuevamente.')
-		} catch { }
+			clearError()
+		} catch (e) {
+			showError('Error al reconectar: ' + e.message)
+		}
 	})
 }
 
-// Clear logs button functionality
-const clearLogsBtn = document.getElementById('clear-logs')
-if (clearLogsBtn) {
-	clearLogsBtn.addEventListener('click', () => {
-		clearLogs()
+if (els.btnResetLogin) {
+	els.btnResetLogin.addEventListener('click', async () => {
+		try {
+			setStatus('reiniciando sesión...')
+			await apiPost('/api/reset-login')
+			clearError()
+		} catch (e) {
+			showError('Error al reiniciar sesión: ' + e.message)
+		}
 	})
 }

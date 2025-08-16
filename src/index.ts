@@ -66,17 +66,35 @@ async function findAvailablePort(startPort: number = 3000, maxAttempts: number =
 
 function sseBroadcast(event: string, data: string) {
   const safeData = (data === undefined || data === null) ? '' : String(data);
-  for (const client of sseClients) {
+  const deadClients: number[] = [];
+  
+  for (let i = 0; i < sseClients.length; i++) {
+    const client = sseClients[i];
     try {
       client.write(`event: ${event}\n`);
       client.write(`data: ${safeData}\n\n`);
-    } catch {}
+    } catch (error) {
+      // Mark dead clients for removal
+      deadClients.push(i);
+      logWarn(`SSE client ${i} disconnected unexpectedly`);
+    }
+  }
+  
+  // Remove dead clients in reverse order to maintain indices
+  for (let i = deadClients.length - 1; i >= 0; i--) {
+    sseClients.splice(deadClients[i], 1);
   }
 }
 
 function broadcastStatus(status: string) {
   lastStatus = status;
+  logInfo(`Status cambió a: ${status}`);
   sseBroadcast('status', status);
+}
+
+function broadcastError(message: string) {
+  logError(`Broadcasting error: ${message}`);
+  sseBroadcast('error', message);
 }
 
 function pushRecentLog(entry: LogEntry) {
@@ -114,53 +132,100 @@ function startWebServer(port = 3000): Promise<number> {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Cache-Control',
         });
         res.write('\n');
         sseClients.push(res);
+        
+        // Enhanced connection handling
+        const clientId = sseClients.length - 1;
+        logInfo(`SSE client ${clientId} connected, total clients: ${sseClients.length}`);
+        
         req.on('close', () => {
+          const i = sseClients.indexOf(res);
+          if (i >= 0) {
+            sseClients.splice(i, 1);
+            logInfo(`SSE client ${clientId} disconnected, remaining clients: ${sseClients.length}`);
+          }
+        });
+        
+        req.on('error', (err) => {
+          logWarn(`SSE client ${clientId} error:`, err);
           const i = sseClients.indexOf(res);
           if (i >= 0) sseClients.splice(i, 1);
         });
+        
         // Send initial snapshot: last logs and a stats sample
-        for (const entry of recentLogs) {
-          try {
+        try {
+          for (const entry of recentLogs.slice(-50)) { // Only send last 50 logs for faster loading
             res.write(`event: log\n`);
             res.write(`data: ${JSON.stringify(entry)}\n\n`);
-          } catch {}
-        }
-        const snapshot = computeStats();
-        try {
+          }
+          
+          const snapshot = computeStats();
           res.write(`event: stats\n`);
           res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
-        } catch {}
-        // Send current status & QR snapshot
-        try {
-    res.write(`event: status\n`);
-    res.write(`data: ${(lastStatus || 'unknown')}\n\n`);
-  } catch {}
-  try {
-    res.write(`event: qr\n`);
-    res.write(`data: ${(lastQrDataUrl || '')}\n\n`);
-  } catch {}
+          
+          // Send current status & QR snapshot
+          res.write(`event: status\n`);
+          res.write(`data: ${(lastStatus || 'initializing')}\n\n`);
+          
+          res.write(`event: qr\n`);
+          res.write(`data: ${(lastQrDataUrl || '')}\n\n`);
+          
+          // Send ready signal to indicate initial data is complete
+          res.write(`event: ready\n`);
+          res.write(`data: true\n\n`);
+        } catch (err) {
+          logError('Error sending initial SSE snapshot:', err);
+          res.end();
+        }
       } else if (url === '/api/reconnect' && req.method === 'POST') {
         // Manual reconnect without deleting auth
-        requestReconnect({ resetAuth: false });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        try {
+          requestReconnect({ resetAuth: false });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, message: 'Reconexión iniciada' }));
+        } catch (error) {
+          logError('Error during reconnect:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Error al reconectar' }));
+        }
       } else if (url === '/api/reset-login' && req.method === 'POST') {
         // Full reset: delete auth and restart
-        requestReconnect({ resetAuth: true });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        try {
+          requestReconnect({ resetAuth: true });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, message: 'Reinicio de sesión iniciado' }));
+        } catch (error) {
+          logError('Error during reset-login:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Error al reiniciar sesión' }));
+        }
       } else if (url === '/api/snapshot' && req.method === 'GET') {
-        const body = {
-    status: lastStatus || 'unknown',
-    qrDataUrl: lastQrDataUrl || '',
-    stats: computeStats(),
-    logs: Array.isArray(recentLogs) ? recentLogs.slice(-100) : [],
-  };
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(body));
+        try {
+          const body = {
+            status: lastStatus || 'initializing',
+            qrDataUrl: lastQrDataUrl || '',
+            stats: computeStats(),
+            logs: Array.isArray(recentLogs) ? recentLogs.slice(-100) : [], // Only last 100 logs
+            timestamp: Date.now(),
+            version: '1.0.0'
+          };
+          res.writeHead(200, { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          });
+          res.end(JSON.stringify(body));
+        } catch (error) {
+          logError('Error generating snapshot:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ 
+            error: 'Error interno del servidor', 
+            timestamp: Date.now() 
+          }));
+        }
       } else if (url.startsWith('/assets/')) {
         // Serve static assets from public/assets
         const normalized = path.normalize(url).replace(/^\.\.(\/|\\)/, '');
@@ -326,6 +391,7 @@ const SYSTEM_PROMPT =
   "Prótesis Dental (debe asistir a consulta para evaluar que tipo de prótesis necesita) " +
   "Realizamos Retenedores: 85$ " +
   "Trabajamos previa cita. Utiliza esta información de precios para responder consultas sobre costos y ayudar a los pacientes a entender qué servicios ofrecemos. " +
+  "HORARIO DE ATENCIÓN: Si el usuario pregunta por horarios, responde con: 'Lunes a Viernes de 9:00AM a 5:00PM'." +
   "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda.";
 
 // Rate limiting
@@ -358,31 +424,6 @@ const TOOL_GENERATE_BOOK_URL = {
         service: { type: "string", description: "Tipo de servicio dental" },
       },
       required: ["name", "service"],
-    },
-  },
-} as const;
-
-// 2) Get current date/time (function tool)
-const TOOL_GET_DATETIME = {
-  type: "function",
-  function: {
-    name: "get_datetime",
-    description:
-      "Devuelve fecha/hora actuales, día de semana y zona horaria. Usa IANA TZ (ej. America/Caracas).",
-    parameters: {
-      type: "object",
-      properties: {
-        timezone: {
-          type: "string",
-          description:
-            "IANA TZ; si falta, usar la del usuario/clinica o el valor por defecto.",
-        },
-        locale: {
-          type: "string",
-          description: "Locale para formateo; por defecto es-ES.",
-        },
-      },
-      required: [],
     },
   },
 } as const;
@@ -448,22 +489,18 @@ function buildTimeAnchor(tz?: string, locale = "es-VE") {
 // ---------- Agent executor (Tools API with tool_calls) ----------
 async function runAgent(
   messagesForAPI: ChatMessage[],
-  options?: { onTool?: (e: any) => void; forceGetTime?: boolean },
+  options?: { onTool?: (e: any) => void },
 ) {
-  const MAX_STEPS = 3;
   let msgs: ChatCompletionMessageParam[] = [...messagesForAPI];
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  while (true) {
     const completion = await openai.chat.completions.create({
       model: "deepseek-chat",
       messages: msgs,
       tools: [
         TOOL_GENERATE_BOOK_URL,
-        TOOL_GET_DATETIME,
       ],
-      tool_choice: options?.forceGetTime
-        ? { type: "function", function: { name: "get_datetime" } }
-        : "auto",
+      tool_choice: "auto",
     });
 
     const choice = completion.choices?.[0]?.message as ChatCompletionMessageParam & { tool_calls?: any[] };
@@ -543,12 +580,10 @@ async function runAgent(
     if (typeof choice.content === "string" && choice.content.trim()) {
       return { type: "final", content: choice.content.trim() } as const;
     }
+    
+    // If no content, return the choice as is - let the model generate its response
+    return { type: "final", content: choice.content || "Lo siento, no pude generar una respuesta. ¿Podrías repetir tu pregunta?" } as const;
   }
-
-  return {
-    type: "final",
-    content: "¿Qué día y horario prefieres para tu cita?",
-  } as const;
 }
 
 // ========== SHARED MESSAGE HANDLER ==========
@@ -596,12 +631,7 @@ async function handleIncomingMessage(
   conversations.set(chatId, history);
 
   try {
-    const tz = ctx.user.tz || ctx.clinic.tz || DEFAULT_TZ;
-    const timeAnchorMsg: ChatMessage = {
-      role: "system",
-      content: buildTimeAnchor(tz, "es-VE"),
-    };
-    // Build messages (include your NOW_ANCHOR/time anchor if added earlier)
+    // Build messages for API
     const ctxMsg: ChatMessage = {
       role: "system",
       content: JSON.stringify(ctx),
@@ -609,13 +639,8 @@ async function handleIncomingMessage(
     const promptMsg: ChatMessage = { role: "system", content: SYSTEM_PROMPT };
     const messagesForAPI: ChatMessage[] = [ctxMsg, promptMsg, ...history];
 
-    // Optional heuristic to force time tool on date/time queries
-    const wantsTime =
-      /\b(hora|fecha|día|dia|año|ano|today|time|date|year)\b/i.test(text);
-
     const result = await runAgent(messagesForAPI, {
       onTool: opts?.onTool,
-      forceGetTime: wantsTime,
     });
 
     // Handle dynamic Cal.com booking link generation
@@ -638,8 +663,9 @@ async function handleIncomingMessage(
     }
 
     if (result.type === "final") {
-      await sendFn(result.content);
-      history.push({ role: "assistant", content: result.content });
+      const content = typeof result.content === "string" ? result.content : String(result.content || "");
+      await sendFn(content);
+      history.push({ role: "assistant", content });
       if (history.length > MAX_HISTORY)
         history.splice(0, history.length - MAX_HISTORY);
       conversations.set(chatId, history);
@@ -709,6 +735,7 @@ async function startWhatsAppBot() {
         currentBotNumber = jid.split('@')[0];
       }
     } catch {}
+    
     if (qr) {
       try {
         const qrCode = await qrcode.toString(qr, {
@@ -721,44 +748,75 @@ async function startWhatsAppBot() {
           const dataUrl = await qrcode.toDataURL(qr);
           lastQrDataUrl = dataUrl;
           sseBroadcast('qr', dataUrl);
-        } catch {}
+          broadcastStatus('qr_ready');
+          logInfo('QR code generado y enviado a la interfaz web');
+        } catch (qrError) {
+          logError('Error generating QR data URL:', qrError);
+          broadcastError('Error generando código QR');
+        }
       } catch (err) {
         logError("Failed to generate QR code", err);
+        broadcastError('Error al generar código QR');
       }
     }
+    
     if (connection === "close") {
       botStarting = false;
-      // Check for Baileys stream:error conflict (session replaced)
+      lastQrDataUrl = null; // Clear QR when connection closes
+      
+      // Enhanced error handling for different disconnect reasons
       const error = lastDisconnect?.error as any;
       const status = error?.output?.statusCode;
-      const isConflict = error?.message?.includes('conflict') || (error?.output?.payload && String(error.output.payload).includes('conflict'));
+      const isConflict = error?.message?.includes('conflict') || 
+                        (error?.output?.payload && String(error.output.payload).includes('conflict'));
+      
       if (isConflict) {
         logError("WhatsApp session conflict detected (stream:error type replaced). Stopping auto-reconnect. You are likely logged in elsewhere.");
         broadcastStatus('conflict');
+        broadcastError('Sesión duplicada detectada. Ya hay una sesión activa en otro dispositivo.');
         reconnectInProgress = false;
         return;
       }
+      
       if (status === DisconnectReason.loggedOut) {
         logError("Logged out. Deleting auth_info and restarting for fresh login.");
-        // notify status to web UI
         broadcastStatus('logged_out');
+        broadcastError('Sesión expirada. Reiniciando para nuevo login...');
+        
         // Delete auth_info folder and restart
         try {
           fs.rmSync(authFolder, { recursive: true, force: true });
+          logInfo('Auth info deleted successfully');
         } catch (e) {
           logError("Failed to delete auth_info folder:", e);
         }
+        
         setTimeout(() => {
           reconnectInProgress = false;
           startWhatsAppBot();
         }, 2000);
+      } else if (status === DisconnectReason.restartRequired) {
+        logWarn("Restart required by WhatsApp");
+        broadcastStatus('restart_required');
+        setTimeout(() => {
+          reconnectInProgress = false;
+          startWhatsAppBot();
+        }, 1000);
+      } else if (status === DisconnectReason.connectionLost) {
+        logWarn("Connection lost, attempting to reconnect");
+        broadcastStatus('connection_lost');
+        setTimeout(() => {
+          reconnectInProgress = false;
+          startWhatsAppBot();
+        }, 3000);
       } else {
-        // Try to reconnect automatically
+        // Generic reconnection
+        logWarn(`Connection closed with status: ${status}, attempting to reconnect`);
+        broadcastStatus('reconnecting');
         setTimeout(() => {
           reconnectInProgress = false;
           startWhatsAppBot();
         }, 2000);
-        broadcastStatus('close');
       }
     } else if (connection === "open") {
       botStarting = false;
@@ -766,7 +824,13 @@ async function startWhatsAppBot() {
       lastQrDataUrl = null; // no need to show QR while connected
       broadcastStatus('open');
       reconnectInProgress = false;
-      if (currentBotNumber) logInfo(`Bot number: ${currentBotNumber}`);
+      if (currentBotNumber) {
+        logInfo(`Bot number: ${currentBotNumber}`);
+        sseBroadcast('botNumber', currentBotNumber);
+      }
+    } else if (connection === "connecting") {
+      broadcastStatus('connecting');
+      logInfo('Connecting to WhatsApp...');
     }
   });
 

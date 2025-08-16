@@ -7,6 +7,7 @@ export const els = {
 	btnReconnect: document.getElementById('btn-reconnect'),
 	btnResetLogin: document.getElementById('btn-reset-login'),
 	logs: document.getElementById('logs'),
+	loading: document.getElementById('loading-overlay'), // New loading overlay
 	stats: {
 		clients: document.getElementById('stat-clients'),
 		conversations: document.getElementById('stat-conversations'),
@@ -27,13 +28,22 @@ export function setStatus(text) {
 		'reconnecting...': 'reconectando...',
 		'LOGGED OUT. Reconectando...': 'DESCONECTADO. Reconectando...',
 		'connecting': 'conectando',
+		'initializing': 'inicializando',
 		'ready': 'listo',
 		'close': 'cerrado',
-		'open': 'abierto'
+		'open': 'conectado',
+		'conflict': 'conflicto - sesión duplicada',
+		'logged_out': 'desconectado',
+		'qr_ready': 'código QR listo',
+		'restart_required': 'reinicio requerido',
+		'connection_lost': 'conexión perdida'
 	}
 
 	const translatedText = statusTranslations[text] || text
-	els.status.textContent = `Estado: ${translatedText}`
+	if (els.status) {
+		els.status.textContent = `Estado: ${translatedText}`
+		console.log('Status updated to:', translatedText)
+	}
 }
 
 export function showQR(dataUrl) {
@@ -96,18 +106,81 @@ export function showError(msg) {
 	els.error.style.display = 'block'
 }
 export function clearError() {
-	els.error.textContent = ''
-	els.error.style.display = 'none'
+	if (els.error) {
+		els.error.textContent = ''
+		els.error.style.display = 'none'
+	}
 }
 
-export async function apiPost(path) {
+export function showLoading(message = 'Cargando...') {
+	// Create loading overlay if it doesn't exist
+	if (!els.loading) {
+		const overlay = document.createElement('div')
+		overlay.id = 'loading-overlay'
+		overlay.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'
+		overlay.innerHTML = `
+			<div class="bg-white rounded-lg p-6 max-w-sm mx-4 text-center">
+				<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+				<p id="loading-message" class="text-gray-700">${message}</p>
+			</div>
+		`
+		document.body.appendChild(overlay)
+		els.loading = overlay
+	} else {
+		const messageEl = document.getElementById('loading-message')
+		if (messageEl) messageEl.textContent = message
+		els.loading.style.display = 'flex'
+	}
+}
+
+export function hideLoading() {
+	if (els.loading) {
+		els.loading.style.display = 'none'
+	}
+}
+
+export async function apiPost(endpoint, data = {}) {
+	const loadingMessage = endpoint === '/api/reconnect' ? 'Reconectando...' : 'Reiniciando sesión...'
+	showLoading(loadingMessage)
+
 	try {
-		const res = await fetch(path, { method: 'POST' })
-		if (!res.ok) throw new Error(`HTTP ${res.status}`)
-		return await res.json()
-	} catch (e) {
-		showError('Request failed: ' + (e?.message || e))
-		throw e
+		const controller = new AbortController()
+		const timeoutId = setTimeout(() => controller.abort(), 15000) // 15 second timeout
+
+		const res = await fetch(endpoint, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+			signal: controller.signal
+		})
+
+		clearTimeout(timeoutId)
+
+		const result = await res.json()
+
+		if (!res.ok) {
+			throw new Error(result.error || `HTTP ${res.status}`)
+		}
+
+		if (result.message) {
+			// Show success message briefly
+			showLoading(result.message + ' ✓')
+			setTimeout(hideLoading, 2000)
+		} else {
+			hideLoading()
+		}
+
+		return result
+	} catch (error) {
+		hideLoading()
+
+		if (error.name === 'AbortError') {
+			showError('Tiempo de espera agotado. Intenta nuevamente.')
+		} else {
+			showError(`Error en solicitud: ${error.message}`)
+		}
+
+		throw error
 	}
 }
 
