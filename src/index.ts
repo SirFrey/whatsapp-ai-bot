@@ -564,7 +564,7 @@ async function handleIncomingMessage(
       let url: string = payload.url || "";
       const phone = userVisibleSender.replace(/^\+/, "");
       const sep = url.includes("?") ? "&" : "?";
-      url = `${url}${sep}attendeePhoneNumber=+${encodeURIComponent(phone)}`;
+      url = `${url}${sep}attendeePhoneNumber=+${encodeURIComponent(phone)}&smsReminderNumber=+${encodeURIComponent(phone)}`;
       const msg = `Aquí tienes tu enlace para completar la reserva:\n${url}`;
       await sendFn(msg);
       history.push({ role: "assistant", content: msg });
