@@ -34,5 +34,5 @@ echo.
 echo 💡 To stop the bot, press Ctrl+C
 echo.
 
-REM Start the bot
-bun run src/index.ts
+REM Start the bot with Node.js
+npm start

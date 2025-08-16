@@ -16,17 +16,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check if Bun is installed
-bun --version >nul 2>&1
-if errorlevel 1 (
-    echo 📦 Please install required runtime first:
-    echo    Visit: https://bun.sh/
-    echo    Follow the Windows installation instructions
+REM Check Node.js version
+for /f "tokens=1 delims=." %%i in ('node --version') do set NODE_MAJOR=%%i
+set NODE_MAJOR=%NODE_MAJOR:v=%
+if %NODE_MAJOR% LSS 18 (
+    echo ❌ Node.js version 18 or higher is required
+    echo    Please update Node.js to version 18 or higher
     pause
     exit /b 1
-) else (
-    echo ✅ Runtime already available
 )
+
+echo ✅ Node.js detected
 
 echo.
 echo 📋 Preparing application...
@@ -54,7 +54,7 @@ if not exist .env (
 
 REM Install dependencies quietly
 echo 📦 Installing required components...
-bun install --silent >nul 2>&1
+npm install --silent >nul 2>&1
 
 REM Hide source code from non-technical users
 if exist src (

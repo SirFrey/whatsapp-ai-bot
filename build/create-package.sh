@@ -50,7 +50,7 @@ echo -e "${BLUE}📦 Preparing distribution files...${NC}"
 # Copy essential files
 cp package.json "$DIST_DIR/"
 cp .env.example "$DIST_DIR/.env"
-cp bun.lock "$DIST_DIR/" 2>/dev/null || echo "No bun.lock found"
+cp package-lock.json "$DIST_DIR/" 2>/dev/null || echo "No package-lock.json found"
 
 # Copy documentation
 cp docs/User_Guide.md "$DIST_DIR/"

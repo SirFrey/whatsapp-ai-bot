@@ -32,5 +32,5 @@ echo ""
 echo "💡 To stop the bot, press Ctrl+C"
 echo ""
 
-# Start the bot
-bun run src/index.ts
+# Start the bot with Node.js
+npm start

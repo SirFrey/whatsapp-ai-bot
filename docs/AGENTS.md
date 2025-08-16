@@ -4,15 +4,15 @@
 - `src/index.ts`: Main entry. Starts WhatsApp bot (Baileys) and a small web UI (SSE on `/events`) for QR/status.
 - `src/utils/`: Utilities (`cal.ts`, `helpers.ts`) for Cal.com tools and helpers.
 - `public/`: Static web UI served at `http://localhost:3000`.
-- `scripts/build.mjs`: Bundles the app with Bun and prepares `dist/` artifacts.
+- `scripts/build.mjs`: Bundles the app with Node.js and prepares `dist/` artifacts.
 - `dist/`: Build output (`run`, `run-win.js`, `run-win.cmd`, `public/`, copied `.env`).
 - `auth_info/`: Local Baileys auth state (ignored by git).
 
 ## Build, Test, and Development Commands
-- `bun install`: Install dependencies.
-- `bun run src/index.ts` or `bun run start`: Run bot + web UI on port 3000. Scan the QR in the browser.
-- `bun run src/index.ts --cli`: Local CLI chat without WhatsApp; useful for quick tests.
-- `bun run build`: Bundle to `dist/` (Unix entry: `./dist/run`).
+- `npm install`: Install dependencies.
+- `npm start` or `npm run dev`: Run bot + web UI on port 3000. Scan the QR in the browser.
+- `npm run dev -- --cli`: Local CLI chat without WhatsApp; useful for quick tests.
+- `npm run build`: Build TypeScript to `dist/`.
 - `bun run build-win`: Bundle Windows-friendly files (run via `dist\run-win.cmd`).
 
 ## Coding Style & Naming Conventions
