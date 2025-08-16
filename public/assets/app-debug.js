@@ -12,7 +12,7 @@ const maxRetries = 5
 async function loadInitialSnapshot() {
 	try {
 		console.log('Loading initial snapshot...')
-		
+
 		const res = await fetch('/api/snapshot', {
 			headers: {
 				'Cache-Control': 'no-cache'
@@ -86,7 +86,7 @@ const es = openSSE('/events', {
 	status: e => {
 		const data = e.data
 		console.log('Status update:', data)
-		
+
 		if (data === 'logged_out') {
 			setStatus('DESCONECTADO. Reconectando...')
 			showError('El bot fue desconectado de WhatsApp. Intentando reconectar automáticamente...')
@@ -105,7 +105,7 @@ const es = openSSE('/events', {
 			hideQR()
 		} else {
 			setStatus(data)
-			
+
 			// Handle QR loading state based on status
 			if (data === 'initializing' || data === 'connecting' || data === 'reconnecting') {
 				showQRLoading()
@@ -114,7 +114,7 @@ const es = openSSE('/events', {
 	},
 	qr: e => {
 		console.log('QR update:', e.data ? 'QR received' : 'QR cleared')
-		
+
 		if (e.data && typeof e.data === 'string' && e.data.length > 20) {
 			showQR(e.data)
 		} else {
@@ -132,7 +132,7 @@ const es = openSSE('/events', {
 		if (e.data) showError('Error del bot: ' + e.data)
 	},
 	log: e => {
-		try { 
+		try {
 			const logData = JSON.parse(e.data)
 			appendLog(logData)
 		} catch (error) {
@@ -151,7 +151,7 @@ const es = openSSE('/events', {
 es.onerror = (event) => {
 	console.error('SSE connection error:', event)
 	isConnected = false
-	
+
 	if (es.readyState === EventSource.CLOSED) {
 		setStatus('desconectado')
 		showError('Conexión perdida con el servidor.')
