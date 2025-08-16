@@ -4,6 +4,9 @@
 # This script starts the WhatsApp AI Bot with enhanced user feedback
 # Usage: ./start.sh [-p port] or ./start.sh --port port
 
+# Change to the project root directory (one level up from build)
+cd "$(dirname "$0")/.."
+
 # Parse command line arguments
 CUSTOM_PORT=3000
 

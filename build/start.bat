@@ -7,6 +7,9 @@ REM Usage: start.bat [-p port] or start.bat --port port
 
 title WhatsApp AI Bot - Starting System...
 
+REM Change to the project root directory (one level up from build)
+cd /d "%~dp0\.."
+
 REM Parse command line arguments
 set "CUSTOM_PORT="
 set "PORT_FLAG="

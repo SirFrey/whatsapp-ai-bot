@@ -16,6 +16,7 @@ import { stdin as input, stdout as output } from "node:process";
 // -------- Web UI server & SSE for QR/status --------
 import http from 'http';
 import fs from 'fs';
+import net from 'net'; // For port checking
 // SSE clients to notify QR and status
 const sseClients: http.ServerResponse[] = [];
 
@@ -33,6 +34,35 @@ let botStarting = false;
 type LogEntry = { level: 'info' | 'warn' | 'error'; msg: string; args: any[]; ts: string };
 const recentLogs: LogEntry[] = [];
 const MAX_RECENT_LOGS = 200;
+
+// Port availability checker
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    
+    server.listen(port, () => {
+      server.once('close', () => {
+        resolve(true);
+      });
+      server.close();
+    });
+    
+    server.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+// Find an available port starting from the preferred port
+async function findAvailablePort(startPort: number = 3000, maxAttempts: number = 10): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(`No available ports found in range ${startPort}-${startPort + maxAttempts - 1}`);
+}
 
 function sseBroadcast(event: string, data: string) {
   const safeData = (data === undefined || data === null) ? '' : String(data);
@@ -68,112 +98,145 @@ function computeStats() {
   };
 }
 
-function startWebServer(port = 3000) {
-  const server = http.createServer((req, res) => {
-    const url = req.url || '/';
-    if (url === '/' || url === '/index.html') {
-      const filePath = path.join(process.cwd(), 'public', 'index.html');
-      fs.readFile(filePath, (err, data) => {
-        if (err) return res.writeHead(500).end('Error loading index.html');
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(data);
-      });
-    } else if (url === '/events') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-      res.write('\n');
-      sseClients.push(res);
-      req.on('close', () => {
-        const i = sseClients.indexOf(res);
-        if (i >= 0) sseClients.splice(i, 1);
-      });
-      // Send initial snapshot: last logs and a stats sample
-      for (const entry of recentLogs) {
+function startWebServer(port = 3000): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      const url = req.url || '/';
+      if (url === '/' || url === '/index.html') {
+        const filePath = path.join(process.cwd(), 'public', 'index.html');
+        fs.readFile(filePath, (err, data) => {
+          if (err) return res.writeHead(500).end('Error loading index.html');
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(data);
+        });
+      } else if (url === '/events') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        res.write('\n');
+        sseClients.push(res);
+        req.on('close', () => {
+          const i = sseClients.indexOf(res);
+          if (i >= 0) sseClients.splice(i, 1);
+        });
+        // Send initial snapshot: last logs and a stats sample
+        for (const entry of recentLogs) {
+          try {
+            res.write(`event: log\n`);
+            res.write(`data: ${JSON.stringify(entry)}\n\n`);
+          } catch {}
+        }
+        const snapshot = computeStats();
         try {
-          res.write(`event: log\n`);
-          res.write(`data: ${JSON.stringify(entry)}\n\n`);
+          res.write(`event: stats\n`);
+          res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
         } catch {}
-      }
-      const snapshot = computeStats();
-      try {
-        res.write(`event: stats\n`);
-        res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
-      } catch {}
-      // Send current status & QR snapshot
-      try {
-  res.write(`event: status\n`);
-  res.write(`data: ${(lastStatus || 'unknown')}\n\n`);
-} catch {}
-try {
-  res.write(`event: qr\n`);
-  res.write(`data: ${(lastQrDataUrl || '')}\n\n`);
-} catch {}
-    } else if (url === '/api/reconnect' && req.method === 'POST') {
-      // Manual reconnect without deleting auth
-      requestReconnect({ resetAuth: false });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-    } else if (url === '/api/reset-login' && req.method === 'POST') {
-      // Full reset: delete auth and restart
-      requestReconnect({ resetAuth: true });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-    } else if (url === '/api/snapshot' && req.method === 'GET') {
-      const body = {
-  status: lastStatus || 'unknown',
-  qrDataUrl: lastQrDataUrl || '',
-  stats: computeStats(),
-  logs: Array.isArray(recentLogs) ? recentLogs.slice(-100) : [],
-};
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(body));
-    } else if (url.startsWith('/assets/')) {
-      // Serve static assets from public/assets
-      const normalized = path.normalize(url).replace(/^\.\.(\/|\\)/, '');
-      const relPath = normalized.replace(/^\/+/, ''); // strip leading '/'
-      const assetPath = path.join(process.cwd(), 'public', relPath);
-      // Ensure the path stays within public
-      const publicDir = path.join(process.cwd(), 'public');
-      if (!assetPath.startsWith(publicDir)) {
-        res.writeHead(403).end('Forbidden');
-        return;
-      }
-      fs.readFile(assetPath, (err, data) => {
-        if (err) {
-          res.writeHead(404).end('Not found');
+        // Send current status & QR snapshot
+        try {
+    res.write(`event: status\n`);
+    res.write(`data: ${(lastStatus || 'unknown')}\n\n`);
+  } catch {}
+  try {
+    res.write(`event: qr\n`);
+    res.write(`data: ${(lastQrDataUrl || '')}\n\n`);
+  } catch {}
+      } else if (url === '/api/reconnect' && req.method === 'POST') {
+        // Manual reconnect without deleting auth
+        requestReconnect({ resetAuth: false });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else if (url === '/api/reset-login' && req.method === 'POST') {
+        // Full reset: delete auth and restart
+        requestReconnect({ resetAuth: true });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else if (url === '/api/snapshot' && req.method === 'GET') {
+        const body = {
+    status: lastStatus || 'unknown',
+    qrDataUrl: lastQrDataUrl || '',
+    stats: computeStats(),
+    logs: Array.isArray(recentLogs) ? recentLogs.slice(-100) : [],
+  };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      } else if (url.startsWith('/assets/')) {
+        // Serve static assets from public/assets
+        const normalized = path.normalize(url).replace(/^\.\.(\/|\\)/, '');
+        const relPath = normalized.replace(/^\/+/, ''); // strip leading '/'
+        const assetPath = path.join(process.cwd(), 'public', relPath);
+        // Ensure the path stays within public
+        const publicDir = path.join(process.cwd(), 'public');
+        if (!assetPath.startsWith(publicDir)) {
+          res.writeHead(403).end('Forbidden');
           return;
         }
-        const ext = path.extname(assetPath).toLowerCase();
-        const ctype = ext === '.js' ? 'text/javascript; charset=utf-8'
-          : ext === '.css' ? 'text/css; charset=utf-8'
-          : ext === '.json' ? 'application/json'
-          : ext === '.png' ? 'image/png'
-          : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
-          : ext === '.svg' ? 'image/svg+xml'
-          : 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': ctype });
-        res.end(data);
-      });
-    } else {
-      res.writeHead(404).end();
+        fs.readFile(assetPath, (err, data) => {
+          if (err) {
+            res.writeHead(404).end('Not found');
+            return;
+          }
+          const ext = path.extname(assetPath).toLowerCase();
+          const ctype = ext === '.js' ? 'text/javascript; charset=utf-8'
+            : ext === '.css' ? 'text/css; charset=utf-8'
+            : ext === '.json' ? 'application/json'
+            : ext === '.png' ? 'image/png'
+            : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+            : ext === '.svg' ? 'image/svg+xml'
+            : 'application/octet-stream';
+          res.writeHead(200, { 'Content-Type': ctype });
+          res.end(data);
+        });
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        logWarn(`Puerto ${port} ya está en uso`);
+        reject(new Error(`Port ${port} is already in use`));
+      } else {
+        logError(`Error del servidor en puerto ${port}:`, err);
+        reject(err);
+      }
+    });
+
+    server.listen(port, () => {
+      logInfo(`Servidor web ejecutándose en http://localhost:${port}`);
+      resolve(port);
+      import('open').then(open => open.default(`http://localhost:${port}`));
+    });
+
+    // Periodic stats broadcast (once)
+    if (!statsInterval) {
+      statsInterval = setInterval(() => {
+        try {
+          const stats = computeStats();
+          sseBroadcast('stats', JSON.stringify(stats));
+        } catch {}
+      }, 1000);
     }
   });
-  server.listen(port, () => {
-    logInfo(`Web server running at http://localhost:${port}`);
-    import('open').then(open => open.default(`http://localhost:${port}`));
-  });
+}
 
-  // Periodic stats broadcast (once)
-  if (!statsInterval) {
-    statsInterval = setInterval(() => {
-      try {
-        const stats = computeStats();
-        sseBroadcast('stats', JSON.stringify(stats));
-      } catch {}
-    }, 1000);
+// Function to start web server with automatic port fallback
+async function startWebServerWithFallback(preferredPort: number = 3000): Promise<number> {
+  try {
+    // First try the preferred port
+    return await startWebServer(preferredPort);
+  } catch (error) {
+    // If preferred port fails, find an available port
+    logWarn(`Puerto preferido ${preferredPort} no disponible, buscando puerto alternativo...`);
+    try {
+      const availablePort = await findAvailablePort(preferredPort);
+      logInfo(`Puerto alternativo encontrado: ${availablePort}`);
+      return await startWebServer(availablePort);
+    } catch (fallbackError) {
+      logError('No se pudo encontrar un puerto disponible:', fallbackError);
+      throw new Error('No available ports found for web server');
+    }
   }
 }
 
@@ -812,8 +875,41 @@ async function startCliChat() {
   if (useCli) {
     await startCliChat();
   } else {
-    // start web UI server
-    startWebServer();
+    // Start web UI server with automatic port fallback
+    try {
+      // Check for custom port from command line arguments, environment variable, or default to 3000
+      let preferredPort = 3000;
+      
+      // Check for -p or --port flag
+      const portArgIndex = process.argv.findIndex(arg => arg === '-p' || arg === '--port');
+      if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+        const portArg = parseInt(process.argv[portArgIndex + 1], 10);
+        if (!isNaN(portArg) && portArg > 0 && portArg <= 65535) {
+          preferredPort = portArg;
+          logInfo(`🔧 Puerto especificado por línea de comandos: ${preferredPort}`);
+        } else {
+          logWarn(`Puerto inválido especificado: ${process.argv[portArgIndex + 1]}, usando puerto por defecto: ${preferredPort}`);
+        }
+      }
+      // Check environment variable if no command line argument
+      else if (process.env.PORT) {
+        const envPort = parseInt(process.env.PORT, 10);
+        if (!isNaN(envPort) && envPort > 0 && envPort <= 65535) {
+          preferredPort = envPort;
+          logInfo(`🔧 Puerto especificado por variable de entorno: ${preferredPort}`);
+        }
+      }
+      
+      const actualPort = await startWebServerWithFallback(preferredPort);
+      logInfo(`🌐 Panel de control disponible en: http://localhost:${actualPort}`);
+      
+      if (actualPort !== preferredPort) {
+        logInfo(`💡 Nota: El puerto preferido ${preferredPort} no estaba disponible, usando puerto ${actualPort}`);
+      }
+    } catch (error) {
+      logError('Error iniciando servidor web:', error);
+      process.exit(1);
+    }
     await startWhatsAppBot();
   }
 })();
