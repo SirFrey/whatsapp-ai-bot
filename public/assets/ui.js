@@ -19,20 +19,80 @@ export const els = {
 }
 
 export function setStatus(text) {
-	els.status.textContent = `Status: ${text}`
+	// Translate status messages to Spanish
+	const statusTranslations = {
+		'unknown': 'desconocido',
+		'disconnected': 'desconectado',
+		'connected': 'conectado',
+		'reconnecting...': 'reconectando...',
+		'LOGGED OUT. Reconectando...': 'DESCONECTADO. Reconectando...',
+		'connecting': 'conectando',
+		'ready': 'listo',
+		'close': 'cerrado',
+		'open': 'abierto'
+	}
+
+	const translatedText = statusTranslations[text] || text
+	els.status.textContent = `Estado: ${translatedText}`
 }
 
 export function showQR(dataUrl) {
-	els.qrImg.src = dataUrl
-	els.qrSection.style.display = 'block'
+	if (els.qrImg && els.qrSection) {
+		const qrLoading = document.getElementById('qr-loading')
+		if (qrLoading) {
+			qrLoading.style.display = 'none' // Hide loading state
+		}
+		els.qrImg.src = dataUrl
+		els.qrImg.style.display = 'block' // Show QR image
+		els.qrSection.style.display = 'block'
+	}
 }
 export function hideQR() {
-	els.qrImg.removeAttribute('src')
-	els.qrSection.style.display = 'none'
+	if (els.qrImg && els.qrSection) {
+		const qrLoading = document.getElementById('qr-loading')
+		if (qrLoading) {
+			qrLoading.style.display = 'none'
+		}
+		els.qrImg.removeAttribute('src')
+		els.qrImg.style.display = 'none'
+		els.qrSection.style.display = 'none'
+	}
+}
+
+export function showQRLoading() {
+	if (els.qrSection) {
+		const qrLoading = document.getElementById('qr-loading')
+		if (qrLoading) {
+			qrLoading.style.display = 'block'
+		}
+		if (els.qrImg) {
+			els.qrImg.style.display = 'none'
+		}
+		els.qrSection.style.display = 'block'
+	}
 }
 
 export function showError(msg) {
-	els.error.textContent = msg
+	// Translate common error messages to Spanish
+	const errorTranslations = {
+		'Connection lost to server. Try Reconnect or Reset login.': 'Conexión perdida con el servidor. Intenta Reconectar o Reiniciar sesión.',
+		'Disconnected from WhatsApp. You can try to reconnect.': 'Desconectado de WhatsApp. Puedes intentar reconectar.',
+		'Request failed:': 'Solicitud falló:',
+		'Bot error:': 'Error del bot:'
+	}
+
+	let translatedMsg = msg
+	for (const [english, spanish] of Object.entries(errorTranslations)) {
+		if (msg.includes(english)) {
+			translatedMsg = msg.replace(english, spanish)
+			break
+		}
+	}
+
+	const errorElement = document.getElementById('error-message')
+	if (errorElement) {
+		errorElement.textContent = translatedMsg
+	}
 	els.error.style.display = 'block'
 }
 export function clearError() {
@@ -77,4 +137,17 @@ export function appendLog(entry) {
 	els.logs.appendChild(pre)
 	while (els.logs.children.length > MAX_LOG_ROWS) els.logs.removeChild(els.logs.firstChild)
 	if (wasAtBottom) els.logs.scrollTop = els.logs.scrollHeight
+}
+
+// Clear logs functionality
+export function clearLogs() {
+	if (!els.logs) return
+	els.logs.innerHTML = `
+		<div class="text-slate-500 text-center py-8">
+			<svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+			</svg>
+			Esperando registros del sistema...
+		</div>
+	`
 }
