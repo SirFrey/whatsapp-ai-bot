@@ -6,7 +6,6 @@ import {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  proto,
 } from "baileys";
 import OpenAI from "openai";
 import qrcode from "qrcode";
@@ -365,9 +364,7 @@ const contexts = new Map<string, BotContext>();
 const MAX_HISTORY = 20;
 
 // Allowed senders (numbers without '+')
-const ALLOWED_NUMBERS = [].map((n) =>
-  n.replace(/^\+/, ""),
-);
+const ALLOWED_NUMBERS: string[] = [];
 
 // System prompt
 const SYSTEM_PROMPT =
@@ -392,7 +389,9 @@ const SYSTEM_PROMPT =
   "Realizamos Retenedores: 85$ " +
   "Trabajamos previa cita. Utiliza esta información de precios para responder consultas sobre costos y ayudar a los pacientes a entender qué servicios ofrecemos. " +
   "HORARIO DE ATENCIÓN: Si el usuario pregunta por horarios, responde con: 'Lunes a Viernes de 9:00AM a 5:00PM'." +
-  "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda.";
+  "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda." +
+  " SOBRE CASHEA: Cashea es una alternativa de compra accesible que, junto a su red de comercios aliados, te permite comprar lo que necesitas hoy y pagar después en cuotas sin interés. Paga tu compra en una inicial y el resto en cuotas iguales sin interés según tu plan de pagos. " +
+  "Si el usuario pregunta por Cashea o por financiamiento a cuotas, explica brevemente lo anterior y deja claro que actualmente NO aceptamos Cashea como método de pago en el consultorio. Continúa la conversación ofreciendo las opciones disponibles y evita volver a mencionar Cashea a menos que el usuario insista.";
 
 // Rate limiting
 const RATE_LIMIT_MS = 2_000;
