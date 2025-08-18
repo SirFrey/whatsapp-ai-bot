@@ -391,7 +391,10 @@ const SYSTEM_PROMPT =
   "HORARIO DE ATENCIÓN: Si el usuario pregunta por horarios, responde con: 'Lunes a Viernes de 9:00AM a 5:00PM'." +
   "DIRECCIÓN DEL CONSULTORIO: Centro Perú, Torre A, Piso 10, Consultorio 109, Avenida Francisco de Miranda." +
   " SOBRE CASHEA: Cashea es una alternativa de compra accesible que, junto a su red de comercios aliados, te permite comprar lo que necesitas hoy y pagar después en cuotas sin interés. Paga tu compra en una inicial y el resto en cuotas iguales sin interés según tu plan de pagos. " +
-  "Si el usuario pregunta por Cashea o por financiamiento a cuotas, explica brevemente lo anterior y deja claro que actualmente NO aceptamos Cashea como método de pago en el consultorio. Continúa la conversación ofreciendo las opciones disponibles y evita volver a mencionar Cashea a menos que el usuario insista.";
+  "Si el usuario pregunta por Cashea o por financiamiento a cuotas, explica brevemente lo anterior y deja claro que actualmente NO aceptamos Cashea como método de pago en el consultorio. Continúa la conversación ofreciendo las opciones disponibles y evita volver a mencionar Cashea a menos que el usuario insista." +
+  " ESCALAMIENTO A HUMANO: Solo llama a la función handoff_to_human cuando las preguntas del usuario impidan completar la reserva y enviar el enlace (por ejemplo, cuando solicite información crítica, validación o requisitos imprescindibles que no estén disponibles y sin los cuales no puedas generar el enlace). En los demás casos, evita escalar y continúa guiando al usuario para obtener servicio y nombre y proceder con generate_booking_url. " +
+  "Después de llamar a handoff_to_human, no continúes respondiendo y espera la intervención de un miembro del equipo. " +
+  "FORMATO DE MENSAJES (WhatsApp): Usa formato solo cuando sea necesario para resaltar precios, servicios, montos o datos clave. Emplea negritas con *asteriscos* de forma moderada, listas con '-', y saltos de línea simples. No uses HTML ni Markdown avanzado. Evita emojis salvo que el usuario los utilice.";
 
 // Rate limiting
 const RATE_LIMIT_MS = 2_000;
@@ -423,6 +426,24 @@ const TOOL_GENERATE_BOOK_URL = {
         service: { type: "string", description: "Tipo de servicio dental" },
       },
       required: ["name", "service"],
+    },
+  },
+} as const;
+
+// 2) Handoff to human (function tool)
+const TOOL_HANDOFF_TO_HUMAN = {
+  type: "function",
+  function: {
+    name: "handoff_to_human",
+    description:
+      "Escala la conversación a un humano cuando el asistente no cuenta con información precisa para responder.",
+    parameters: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "Tema de la consulta que requiere intervención humana" },
+        reason: { type: "string", description: "Motivo por el que no se puede responder con precisión" },
+      },
+      required: ["topic", "reason"],
     },
   },
 } as const;
@@ -498,6 +519,7 @@ async function runAgent(
       messages: msgs,
       tools: [
         TOOL_GENERATE_BOOK_URL,
+        TOOL_HANDOFF_TO_HUMAN,
       ],
       tool_choice: "auto",
     });
@@ -544,6 +566,16 @@ async function runAgent(
             return {
               type: "function",
               name: "generate_booking_url",
+              arguments: JSON.stringify(result),
+            } as const;
+          } else if (fn === "handoff_to_human") {
+            options?.onTool?.({ source: "handoff", phase: "call", name: fn!, args });
+            const { topic, reason } = args;
+            const result = { topic: String(topic || ""), reason: String(reason || "") };
+            options?.onTool?.({ source: "handoff", phase: "result", name: fn!, args, resultSummary: `topic=${result.topic}` });
+            return {
+              type: "function",
+              name: "handoff_to_human",
               arguments: JSON.stringify(result),
             } as const;
           } else {
@@ -658,6 +690,25 @@ async function handleIncomingMessage(
       if (history.length > MAX_HISTORY)
         history.splice(0, history.length - MAX_HISTORY);
       conversations.set(chatId, history);
+      return;
+    }
+
+    if (result.type === "function" && result.name === "handoff_to_human") {
+      let payload: any = {};
+      try {
+        payload = JSON.parse(result.arguments || "{}");
+      } catch {}
+      const topic = String(payload.topic || "tu consulta");
+      const reason = String(payload.reason || "falta de información precisa");
+      const msg = `Gracias por tu consulta. Para brindarte una respuesta 100% precisa sobre ${topic}, te pondremos en contacto con un asesor humano. Por favor espera unos minutos mientras transferimos la conversación.`;
+      await sendFn(msg);
+      history.push({ role: "assistant", content: msg });
+      if (history.length > MAX_HISTORY)
+        history.splice(0, history.length - MAX_HISTORY);
+      conversations.set(chatId, history);
+      try {
+        sseBroadcast('handoff', JSON.stringify({ chatId, topic, reason, timestamp: Date.now() }));
+      } catch {}
       return;
     }
 
