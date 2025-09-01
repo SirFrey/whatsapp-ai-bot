@@ -22,17 +22,9 @@ An intelligent WhatsApp chatbot powered by AI, designed specifically for dental 
 3. **Start Development**
    ```bash
    npm run dev
+   # or run normally
+   npm start
    ```
-
-### For End Users
-
-1. **Download the packaged distribution**
-2. **Run setup script:**
-   - Linux/Mac: `./setup.sh`
-   - Windows: `setup.bat`
-3. **Start the bot:**
-   - Linux/Mac: `./start.sh`
-   - Windows: `start.bat`
 
 ## 📁 Project Structure
 
@@ -43,24 +35,16 @@ whatsapp-ai-bot/
 ├── docs/                   # Documentation
 │   ├── User_Guide.md      # User manual
 │   ├── QUICK_START.md     # Quick start guide
-│   └── PACKAGE_README.md  # Distribution readme
-├── build/                  # Build and setup scripts
-│   ├── setup.sh/bat       # Installation scripts
-│   ├── start.sh/bat       # Startup scripts
-│   └── create-package.sh  # Package creation
-├── scripts/                # Advanced build scripts
-│   ├── obfuscate.mjs      # Code obfuscation
-│   └── create-secure-package.mjs # Secure packaging
-└── dist-user/             # User distribution (generated)
+ 
+└── (build output under dist/)
 ```
 
 ## 🛠️ Development Commands
 
 - `npm run dev` - Start development server
+- `npm start` - Start the app
 - `npm run build` - Build TypeScript
-- `npm run build:obfuscated` - Build with code obfuscation
-- `npm run package:user` - Create user distribution package
-- `npm run clean` - Clean all build directories
+- `npm run clean` - Clean build output
 
 ## 🔧 Configuration
 
@@ -74,23 +58,14 @@ Required environment variables:
 - 📱 WhatsApp Web integration via Baileys
 - 🌐 Web interface for QR code scanning
 - 🏥 Dental clinic specific automation
-- 🔐 Secure code distribution
 - 📦 Easy setup for non-technical users
 
-## 🔐 Security Features
-
-The production build includes:
-- Code obfuscation and minification
-- Anti-debugging protection
-- Encrypted source code
-- VM detection mechanisms
-- Stealth packaging
 
 ## 📖 Documentation
 
 - [User Guide](docs/User_Guide.md) - Complete user manual
 - [Quick Start](docs/QUICK_START.md) - Fast setup guide
-- [Package README](docs/PACKAGE_README.md) - Distribution guide
+ 
 
 ## 🤝 Contributing
 
@@ -102,7 +77,7 @@ The production build includes:
 
 ## 📄 License
 
-This project is licensed for commercial use. See the license terms in the distribution package.
+This project is licensed for commercial use.
 
 ## 🆘 Support
 
@@ -113,4 +88,4 @@ For support and questions:
 
 ---
 
-**Note:** This is the developer version. End users should use the pre-built distribution package.
+**Note:** This is the developer version.

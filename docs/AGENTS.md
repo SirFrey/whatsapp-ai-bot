@@ -4,7 +4,7 @@
 - `src/index.ts`: Main entry. Starts WhatsApp bot (Baileys) and a small web UI (SSE on `/events`) for QR/status.
 - `src/utils/`: Utilities (`cal.ts`, `helpers.ts`) for Cal.com tools and helpers.
 - `public/`: Static web UI served at `http://localhost:3000`.
-- `scripts/build.mjs`: Bundles the app with Node.js and prepares `dist/` artifacts.
+ 
 - `dist/`: Build output (`run`, `run-win.js`, `run-win.cmd`, `public/`, copied `.env`).
 - `auth_info/`: Local Baileys auth state (ignored by git).
 

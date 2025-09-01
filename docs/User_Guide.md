@@ -7,8 +7,8 @@ This is a smart WhatsApp assistant for **Dr. Reina's Dental Clinic**. It automat
 ## 🚀 Getting Started
 
 ### Step 1: Initial Setup
-- **Windows**: Double-click `setup.bat`
-- **Mac/Linux**: Open Terminal and run `./setup.sh`
+- Install Node.js 18+
+- In la carpeta del proyecto, ejecuta: `npm install`
 
 ### Step 2: Get Your API Key
 1. Visit: https://platform.deepseek.com/
@@ -23,8 +23,7 @@ This is a smart WhatsApp assistant for **Dr. Reina's Dental Clinic**. It automat
 3. Save the file
 
 ### Step 4: Start the Bot
-- **Windows**: Double-click `start.bat`
-- **Mac/Linux**: Run `./start.sh` in Terminal
+- Ejecuta en Terminal: `npm start`
 
 ### Step 5: Connect WhatsApp
 1. Open http://localhost:3000 in your web browser
@@ -66,8 +65,7 @@ Access http://localhost:3000 to:
 - Or close the window
 
 ### Restarting the Bot
-- **Windows**: Double-click `start.bat` again
-- **Mac/Linux**: Run `./start.sh` again
+- Ejecuta nuevamente: `npm start`
 
 ## ⚠️ Important Notes
 
@@ -91,7 +89,7 @@ Access http://localhost:3000 to:
 ### Bot won't start?
 - Check that your API key is correctly entered in `.env`
 - Make sure you have internet connection
-- Try running setup again
+- Reinstala dependencias: `rm -rf node_modules && npm install`
 
 ### WhatsApp won't connect?
 - Make sure you're scanning with the correct phone

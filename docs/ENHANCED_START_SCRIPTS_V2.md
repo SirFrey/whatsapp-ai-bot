@@ -3,7 +3,7 @@
 ## ✅ Issues Fixed
 
 ### 🪟 **Windows Terminal Output Issue**
-- **Problem**: start.bat was hiding npm output, users couldn't see what was happening
+- **Problem**: The previous Windows launcher script hid npm output, users couldn't see what was happening
 - **Solution**: Removed output redirection, all npm/application output now visible
 - **Result**: Users can see real-time startup progress, errors, and application logs
 
@@ -14,31 +14,28 @@
 
 ## 🎯 **New Usage Examples**
 
-### **Unix/Linux/Mac (start.sh)**
+### **Unix/Linux/Mac (npm)**
 ```bash
 # Default port (3000)
-./start.sh
+npm start
 
 # Custom port
-./start.sh -p 8080
-./start.sh --port 3001
+npm start -- -p 8080
+npm start -- --port 3001
 
 # Help
-./start.sh -h
-./start.sh --help
+npm start -- -h
+npm start -- --help
 ```
 
-### **Windows (start.bat)**
+### **Windows (npm)**
 ```cmd
 # Default port (3000)
-start.bat
+npm start
 
 # Custom port
-start.bat -p 8080
-start.bat --port 3001
-
-# Simple version with custom port
-start-simple.bat -p 8080
+npm start -- -p 8080
+npm start -- --port 3001
 ```
 
 ## 🔍 **Enhanced Features**
@@ -124,8 +121,8 @@ if errorlevel 1 (
    4. Wait for 'Connected!' message
 
 💡 TIPS:
-   • Custom port usage: ./start.sh -p 8080
-   • If port busy, try: start.bat -p 3001
+   • Custom port usage: npm start -- -p 8080
+   • If port busy, try: npm start -- -p 3001
 ```
 
 ## 🔧 **Technical Implementation**
@@ -153,33 +150,30 @@ if errorlevel 1 (
 ### **Development**
 ```bash
 # Developer testing on different ports
-./start.sh -p 3001    # Instance 1
-./start.sh -p 3002    # Instance 2
-./start.sh -p 3003    # Instance 3
+npm start -- -p 3001    # Instance 1
+npm start -- -p 3002    # Instance 2
+npm start -- -p 3003    # Instance 3
 ```
 
 ### **Production Deployment**
 ```bash
 # Corporate environment with specific port requirements
-./start.sh -p 8080    # Standard web port
-./start.sh -p 9000    # Alternative port
+npm start -- -p 8080    # Standard web port
+npm start -- -p 9000    # Alternative port
 ```
 
 ### **Port Conflict Resolution**
 ```bash
 # If default port is busy
-./start.sh -p 3001    # Try next available port
-
-# Windows equivalent
-start.bat -p 3001
+npm start -- -p 3001    # Try next available port
 ```
 
 ### **Multiple Bot Instances**
 ```bash
 # Different bots for different purposes
-./start.sh -p 3000    # Main customer service bot
-./start.sh -p 3001    # Appointment booking bot
-./start.sh -p 3002    # Emergency support bot
+npm start -- -p 3000    # Main customer service bot
+npm start -- -p 3001    # Appointment booking bot
+npm start -- -p 3002    # Emergency support bot
 ```
 
 ## ✅ **Benefits Summary**

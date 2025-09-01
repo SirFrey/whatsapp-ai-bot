@@ -25,8 +25,8 @@
 
 **Problem:** The .env file is missing
 **Solution:**
-1. Run `setup.bat` first to create the configuration
-2. If setup.bat doesn't exist, create .env manually:
+1. Run `npm install` first to install dependencies
+2. If .env doesn't exist, create it manually:
    ```
    DEEPSEEK_API_KEY=your_api_key_here
    PORT=3000
@@ -102,7 +102,7 @@ node dist/index.js
 
 **Problem:** Box characters (╔═╗) display as question marks
 **Solution:**
-1. Use `start-simple.bat` instead of `start.bat`
+1. Use `npm start` with a custom port, e.g. `npm start -- -p 3001`
 2. Or change Command Prompt font:
    - Right-click title bar → Properties → Font
    - Select "Consolas" or "Lucida Console"
@@ -111,7 +111,7 @@ node dist/index.js
 
 ### **Method 1: Simple Start Script**
 ```cmd
-start-simple.bat
+Use `npm start` from a terminal
 ```
 Basic version without fancy formatting
 
@@ -199,7 +199,7 @@ npm run build && node dist/index.js
 For fastest results on Windows:
 
 1. **Install Node.js LTS** from https://nodejs.org/
-2. **Run as Administrator**: `start-simple.bat`
+2. **Run as Administrator**: a terminal running `npm start`
 3. **If issues**: Try `npm run start:build`
 4. **Last resort**: Manual build with `npm run build && node dist/index.js`
 

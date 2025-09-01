@@ -38,9 +38,9 @@
 
 ### 🐧 **Unix/Linux/Mac Scripts**
 
-#### `build/start.sh` - User Production Script
+#### Starting via npm (Unix/Mac/Linux)
 ```bash
-./start.sh
+npm start
 ```
 **Features:**
 - ✅ Colored terminal output with clear status indicators
@@ -50,23 +50,13 @@
 - ✅ Clear next-steps instructions for users
 - ✅ Professional visual layout with borders
 
-#### `dev-start.sh` - Enhanced Development Script
-```bash
-./dev-start.sh
-```
-**Features:**
-- ✅ Advanced development environment checking
-- ✅ TypeScript compilation status tracking
-- ✅ Process management (kill conflicting processes)
-- ✅ Auto-restart capabilities information
-- ✅ Development-specific tips and controls
-- ✅ Interactive prompts for configuration
+ 
 
 ### 🪟 **Windows Scripts**
 
-#### `build/start.bat` - User Production Script
+#### Starting via npm (Windows)
 ```cmd
-start.bat
+npm start
 ```
 **Features:**
 - ✅ Windows-native progress indicators

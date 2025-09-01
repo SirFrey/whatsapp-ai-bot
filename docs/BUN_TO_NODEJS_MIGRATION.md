@@ -11,26 +11,25 @@
 
 ### 🛠️ **Setup Scripts Updated**
 
-#### **build/setup.sh (Unix)**
+#### **Setup (Unix)**
 - ✅ Removed Bun installation logic
 - ✅ Added Node.js version check (requires v18+)
 - ✅ Changed `bun install` → `npm install`
 
-#### **build/setup.bat (Windows)**
+#### **Setup (Windows)**
 - ✅ Removed Bun installation requirements
 - ✅ Added Node.js version validation
 - ✅ Changed `bun install` → `npm install`
 
 ### 🚀 **Start Scripts Updated**
 
-#### **build/start.sh (Unix)**
+#### **Start (Unix)**
 - ✅ Changed `bun run src/index.ts` → `npm start`
 
-#### **build/start.bat (Windows)**
+#### **Start (Windows)**
 - ✅ Changed `bun run src/index.ts` → `npm start`
 
-### 📁 **Package Creation Script**
-- ✅ Updated `build/create-package.sh` to copy `package-lock.json` instead of `bun.lock`
+ 
 
 ### 📚 **Documentation Updates**
 - ✅ Updated `docs/AGENTS.md` to use npm commands
@@ -51,20 +50,16 @@ npm run build        # Build TypeScript to JavaScript
 npm start            # Start the application
 ```
 
-### User Setup (in distribution)
+### User Setup
 ```bash
-./setup.sh           # Install dependencies with npm (Unix)
-setup.bat            # Install dependencies with npm (Windows)
-./start.sh           # Start with npm start (Unix)
-start.bat            # Start with npm start (Windows)
+npm install          # Install dependencies
+npm start            # Start the application
 ```
 
-### Production & Distribution
+### Production & Maintenance
 ```bash
-npm run build:obfuscated    # Build with code protection
-npm run package:secure      # Create encrypted package
-npm run package:user        # Create user distribution
-npm run clean              # Clean all build directories
+npm run build     # Build TypeScript to JavaScript
+npm run clean     # Clean build directories
 ```
 
 ## 🔧 **Technical Details**
@@ -99,7 +94,6 @@ npm run clean              # Clean all build directories
 The project is now fully migrated to Node.js and ready for:
 - Development with `npm run dev`
 - Production builds with `npm run build`
-- User distribution with Node.js-only requirements
 - Deployment on any Node.js environment
 
 **All scripts and processes now use only Node.js and npm!**

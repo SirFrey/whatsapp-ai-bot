@@ -1,25 +1,14 @@
 # 🚀 Quick Start Guide
 
-## For Non-Technical Users
+## Quick Start
 
-### Windows Users
-
-1. **Download the project** to your computer
-2. **Double-click** `setup.bat` to install everything
-3. **Edit** the `.env` file with your API key
-4. **Double-click** `start.bat` to run the bot
-5. **Open** http://localhost:3000 in your browser
-6. **Scan** the QR code with WhatsApp
-
-### Mac/Linux Users
-
-1. **Download the project** to your computer
-2. **Open Terminal** and navigate to the project folder
-3. **Run:** `./setup.sh` to install everything
-4. **Edit** the `.env` file with your API key
-5. **Run:** `./start.sh` to start the bot
-6. **Open** http://localhost:3000 in your browser
-7. **Scan** the QR code with WhatsApp
+1. **Install Node.js 18+**
+2. **Clone or download** the project
+3. **Install dependencies:** `npm install`
+4. **Copy env template:** `cp .env.example .env` y edítalo con tu API key
+5. **Start the bot:** `npm start` (o `npm run dev` para desarrollo)
+6. **Open** http://localhost:3000 en tu navegador
+7. **Escanea** el código QR con WhatsApp
 
 ## Getting Your API Key
 
