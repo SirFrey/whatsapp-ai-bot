@@ -357,6 +357,12 @@ interface BotContext {
   user: { phone: string; name?: string; tz?: string };
   appointmentHistory: Appointment[];
   clinic: { hours: string; address: string; tz?: string };
+  handoff?: {
+    active: boolean;
+    topic?: string;
+    reason?: string;
+    since?: number;
+  };
 }
 const contexts = new Map<string, BotContext>();
 
@@ -440,6 +446,7 @@ Horario y dirección
 Herramientas
 - generate_booking_url: úsala solo cuando tengas servicio + nombre.
 - handoff_to_human: úsala solo si hay información imprescindible ausente que impide reservar o el usuario requiere algo no cubierto. No la uses para preguntas de precios/tasa/pagos.
+Si llamas a handoff_to_human, después redacta tú un mensaje breve (1–2 líneas) y empático de traspaso al humano, sin plantillas genéricas. Agradece, explica que un asesor responderá en breve (sin inventar tiempos exactos) y, si corresponde, pide 1 dato mínimo adicional para facilitar la gestión.
 
 Guardas médicas
 - No des diagnósticos clínicos por chat. Si es una urgencia, sugiere acudir a un servicio de emergencia.
@@ -582,6 +589,8 @@ async function runAgent(
   options?: { onTool?: (e: any) => void },
 ) {
   let msgs: ChatCompletionMessageParam[] = [...messagesForAPI];
+  // Capture whether a handoff tool was used so caller can act (e.g., disable bot)
+  let handoffResult: { topic: string; reason: string } | undefined;
 
   while (true) {
     const completion = await openai.chat.completions.create({
@@ -632,7 +641,7 @@ async function runAgent(
             }
             const result = { url };
             options?.onTool?.({ source: "appt", phase: "result", name: fn!, args, resultSummary: `url=${url}` });
-            // Return as function call so that the agent can process it
+            // Return as function call so that the caller can post-process link and send immediately
             return {
               type: "function",
               name: "generate_booking_url",
@@ -643,11 +652,14 @@ async function runAgent(
             const { topic, reason } = args;
             const result = { topic: String(topic || ""), reason: String(reason || "") };
             options?.onTool?.({ source: "handoff", phase: "result", name: fn!, args, resultSummary: `topic=${result.topic}` });
-            return {
-              type: "function",
-              name: "handoff_to_human",
-              arguments: JSON.stringify(result),
-            } as const;
+            // Expose to caller later and also let the model produce a tailored final message.
+            handoffResult = result;
+            const toolMsg: ChatCompletionToolMessageParam = {
+              role: "tool",
+              tool_call_id: tc.id,
+              content: JSON.stringify(result),
+            };
+            msgs.push(toolMsg);
           } else {
             const toolMsg: ChatCompletionToolMessageParam = {
               role: "tool",
@@ -679,11 +691,11 @@ async function runAgent(
     }
 
     if (typeof choice.content === "string" && choice.content.trim()) {
-      return { type: "final", content: choice.content.trim() } as const;
+      return { type: "final", content: choice.content.trim(), handoff: handoffResult } as const;
     }
     
     // If no content, return the choice as is - let the model generate its response
-    return { type: "final", content: choice.content || "Lo siento, no pude generar una respuesta. ¿Podrías repetir tu pregunta?" } as const;
+    return { type: "final", content: choice.content || "Lo siento, no pude generar una respuesta. ¿Podrías repetir tu pregunta?", handoff: handoffResult } as const;
   }
 }
 
@@ -695,6 +707,19 @@ async function handleIncomingMessage(
   sendFn: (msg: any) => Promise<void> | void,
   opts?: { onTool?: (e: any) => void },
 ) {
+  // If this chat is in human handoff mode, do NOT auto-respond.
+  // Still record the user's message in history so a human can review it.
+  const existingCtx = contexts.get(chatId);
+  if (existingCtx?.handoff?.active) {
+    let history = conversations.get(chatId) || [];
+    history.push({ role: "user", content: text });
+    if (history.length > MAX_HISTORY)
+      history.splice(0, history.length - MAX_HISTORY);
+    conversations.set(chatId, history);
+    logInfo(`Handoff activo para ${chatId}; se suprime respuesta automática.`);
+    return;
+  }
+
   if (text.length > MAX_INPUT_LENGTH) {
     await sendFn(
       `El mensaje es demasiado largo. Por favor envía menos de ${MAX_INPUT_LENGTH} caracteres.`,
@@ -744,6 +769,28 @@ async function handleIncomingMessage(
       onTool: opts?.onTool,
     });
 
+    // If the model used handoff_to_human and produced a final tailored message,
+    // mark handoff and send the model's response instead of a generic template.
+    if (result.type === "final" && (result as any).handoff) {
+      const hand = (result as any).handoff as { topic?: string; reason?: string };
+      const topic = String(hand?.topic || "tu consulta");
+      const reason = String(hand?.reason || "falta de información precisa");
+      const content = typeof result.content === "string" ? result.content : String(result.content || "");
+      // Mark chat as under human handoff to stop further auto-replies
+      const ctx = contexts.get(chatId)!;
+      ctx.handoff = { active: true, topic, reason, since: Date.now() };
+      contexts.set(chatId, ctx);
+      await sendFn(content);
+      history.push({ role: "assistant", content });
+      if (history.length > MAX_HISTORY)
+        history.splice(0, history.length - MAX_HISTORY);
+      conversations.set(chatId, history);
+      try {
+        sseBroadcast('handoff', JSON.stringify({ chatId, topic, reason, timestamp: Date.now() }));
+      } catch {}
+      return;
+    }
+
     // Handle dynamic Cal.com booking link generation
     if (result.type === "function" && result.name === "generate_booking_url") {
       let payload: any = {};
@@ -763,24 +810,7 @@ async function handleIncomingMessage(
       return;
     }
 
-    if (result.type === "function" && result.name === "handoff_to_human") {
-      let payload: any = {};
-      try {
-        payload = JSON.parse(result.arguments || "{}");
-      } catch {}
-      const topic = String(payload.topic || "tu consulta");
-      const reason = String(payload.reason || "falta de información precisa");
-      const msg = `Gracias por tu consulta. Para brindarte una respuesta 100% precisa sobre ${topic}, te pondremos en contacto con un asesor humano. Por favor espera unos minutos mientras transferimos la conversación.`;
-      await sendFn(msg);
-      history.push({ role: "assistant", content: msg });
-      if (history.length > MAX_HISTORY)
-        history.splice(0, history.length - MAX_HISTORY);
-      conversations.set(chatId, history);
-      try {
-        sseBroadcast('handoff', JSON.stringify({ chatId, topic, reason, timestamp: Date.now() }));
-      } catch {}
-      return;
-    }
+    // (legacy path removed) handoff_to_human now returns a final message and handoff metadata
 
     if (result.type === "final") {
       const content = typeof result.content === "string" ? result.content : String(result.content || "");
@@ -984,7 +1014,7 @@ async function startCliChat() {
   const userLabel = "+584242057621";
 
   console.log(
-    "CLI chat iniciado. Comandos: '/reset', '/tz <IANA>', '/exit'.\n",
+    "CLI chat iniciado. Comandos: '/reset', '/tz <IANA>', '/resume', '/exit'.\n",
   );
 
   const cliToolLogger = (e: any) => {
@@ -1032,6 +1062,17 @@ async function startCliChat() {
     if (user === "/exit") break;
     if (user === "/reset") {
       resetContext();
+      continue;
+    }
+    if (user === "/resume") {
+      const ctx = contexts.get(chatId);
+      if (ctx?.handoff?.active) {
+        ctx.handoff.active = false;
+        contexts.set(chatId, ctx);
+        console.log("(handoff desactivado: el bot volverá a responder)\n");
+      } else {
+        console.log("(handoff ya estaba inactivo)\n");
+      }
       continue;
     }
     if (user.startsWith("/tz ")) {
