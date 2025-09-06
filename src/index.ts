@@ -403,7 +403,7 @@ Servicios oficiales (en € o $ en efectivo)
 - Gingivectomía: 60€ | Frenilectomía: 60€
 - Prótesis dental: requiere evaluación en consulta (tipo según diagnóstico)
 - Retenedores: 85€
-- Nota: rangos orientativos; se confirman en consulta. No trabajamos con ortodoncia de otro doctor y podemos ofrecerle el retiro de la ortodoncia anterior sin costo alguno.
+- Nota: rangos orientativos; se confirman en consulta. No trabajamos con ortodoncia de otro doctor y podemos ofrecerle el retiro de la ortodoncia anterior sin costo alguno si es paciente nuestro y se hizo la ortodoncia con la Dra Reina, si la ortodoncia es de otro doctor, tendría un costo de 25€.
 
 - Nota: La colocación de ortodoncia correctiva es superior e inferior, colocada y controlada por la Dra Reina Guaregua. Mensual quedaría cancelando el control de ortodoncia, que básicamente comprende seguir el plan de tratamiento.
 
@@ -551,44 +551,6 @@ const logError = (msg: string, ...args: any[]) => {
 // WA auth state directory
 const authFolder = path.resolve(process.cwd(), "auth_info");
 
-// ---------- Date/Time util ----------
-function getNowInfo(opts?: { timezone?: string; locale?: string }) {
-  const tz = opts?.timezone || DEFAULT_TZ;
-  const locale = opts?.locale || "es-ES";
-  const now = new Date();
-
-  const localDate = new Intl.DateTimeFormat(locale, {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-  const localTime = new Intl.DateTimeFormat(locale, {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(now);
-  const dayOfWeek = new Intl.DateTimeFormat(locale, {
-    timeZone: tz,
-    weekday: "long",
-  }).format(now);
-
-  return {
-    timezone: tz,
-    iso: now.toISOString(),
-    localDate,
-    localTime,
-    dayOfWeek,
-  };
-}
-
-function buildTimeAnchor(tz?: string, locale = "es-VE") {
-  const info = getNowInfo({ timezone: tz, locale });
-  // Compact, model-friendly line: includes current year explicitly.
-  return `NOW_ANCHOR:: {"timezone":"${info.timezone}","iso":"${info.iso}","localDate":"${info.localDate}","localTime":"${info.localTime}","dayOfWeek":"${info.dayOfWeek}","currentYear":"${new Date(info.iso).getUTCFullYear()}"}`;
-}
-
 // ---------- Agent executor (Tools API with tool_calls) ----------
 async function runAgent(
   messagesForAPI: ChatMessage[],
@@ -645,14 +607,15 @@ async function runAgent(
             } else {
               url = "https://cal.com/booking";
             }
-            const result = { url };
+            const result = { url, name: String(name || ""), service: String(service || "") };
             options?.onTool?.({ source: "appt", phase: "result", name: fn!, args, resultSummary: `url=${url}` });
-            // Return as function call so that the caller can post-process link and send immediately
-            return {
-              type: "function",
-              name: "generate_booking_url",
-              arguments: JSON.stringify(result),
-            } as const;
+            // Provide tool result to the model so it can craft the final message including the URL
+            const toolMsg: ChatCompletionToolMessageParam = {
+              role: "tool",
+              tool_call_id: tc.id,
+              content: JSON.stringify(result),
+            };
+            msgs.push(toolMsg);
           } else if (fn === "handoff_to_human") {
             options?.onTool?.({ source: "handoff", phase: "call", name: fn!, args });
             const { topic, reason } = args;
@@ -797,24 +760,7 @@ async function handleIncomingMessage(
       return;
     }
 
-    // Handle dynamic Cal.com booking link generation
-    if (result.type === "function" && result.name === "generate_booking_url") {
-      let payload: any = {};
-      try {
-        payload = JSON.parse(result.arguments || "{}");
-      } catch {}
-      let url: string = payload.url || "";
-      const phone = userVisibleSender.replace(/^\+/, "");
-      const sep = url.includes("?") ? "&" : "?";
-      url = `${url}${sep}attendeePhoneNumber=+${encodeURIComponent(phone)}&smsReminderNumber=+${encodeURIComponent(phone)}`;
-      const msg = `Aquí tienes tu enlace para completar la reserva:\n${url}`;
-      await sendFn(msg);
-      history.push({ role: "assistant", content: msg });
-      if (history.length > MAX_HISTORY)
-        history.splice(0, history.length - MAX_HISTORY);
-      conversations.set(chatId, history);
-      return;
-    }
+    // No special-case: let the model send the final message (including the URL) after tool output
 
     // (legacy path removed) handoff_to_human now returns a final message and handoff metadata
 
